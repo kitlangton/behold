@@ -32,7 +32,7 @@ The browser is not a separate editor or proprietary document format. The source 
 $ bunx @kitlangton/behold setup
 ✓ Detected a supported coding agent
 ✓ Installed the Behold MCP server
-✓ Started http://behold.localhost:5173
+✓ Started http://127.0.0.1:5173
 ✓ Opened the local viewer
 ```
 
@@ -164,15 +164,16 @@ Agents normally use MCP, but the local HTTP API is intentionally straightforward
 
 ```http
 POST /api/documents HTTP/1.1
-Host: behold.localhost:5173
+Host: 127.0.0.1:5173
 Content-Type: application/json
+X-Behold-Request: 1
 
 {"markdown":"# Retry policy\n\nPlease review the failure budget."}
 
 HTTP/1.1 201 Created
 Content-Type: application/json
 
-{"id":"doc_01JZ9Y","url":"http://behold.localhost:5173/?document=doc_01JZ9Y"}
+{"id":"doc_01JZ9Y","url":"http://127.0.0.1:5173/?document=doc_01JZ9Y"}
 ```
 
 The same boundary can be described as a compact API reference:
@@ -184,7 +185,7 @@ info:
   version: 1.0.0
   description: Host portable Markdown and retrieve durable browser feedback.
 servers:
-  - url: http://behold.localhost:5173
+  - url: http://127.0.0.1:5173
 paths:
   /api/documents:
     post:

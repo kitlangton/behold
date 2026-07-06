@@ -6,6 +6,7 @@ const maxPublishedDocuments = 1_000
 
 interface StoredObject {
   readonly key: string
+  readonly etag: string
   readonly httpEtag: string
   readonly customMetadata?: Record<string, string>
 }
@@ -23,6 +24,7 @@ interface SnapshotBucket {
     options: {
       readonly httpMetadata: { readonly contentType: string; readonly cacheControl: string }
       readonly customMetadata: Record<string, string>
+      readonly onlyIf?: { readonly etagMatches: string }
     },
   ) => Promise<StoredObject | null>
   readonly list: (options: {
@@ -99,6 +101,11 @@ const isPublishedSnapshot = (payload: unknown): payload is PublishedDocumentSnap
 
 const objectKey = (slug: string): string => `${snapshotPrefix}${slug}.json`
 
+const isExpectedExportedAt = (value: string): boolean => {
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
+}
+
 const snapshotSlug = (key: string): string | undefined => {
   if (!key.startsWith(snapshotPrefix) || !key.endsWith(".json")) return undefined
   const slug = key.slice(snapshotPrefix.length, -".json".length)
@@ -107,8 +114,8 @@ const snapshotSlug = (key: string): string | undefined => {
 
 const loadSnapshot = async (environment: CloudflareEnvironment, slug: string): Promise<{ readonly body: string; readonly etag: string } | undefined> => {
   const object = await environment.SNAPSHOTS.get(objectKey(slug))
-  if (!object) return undefined
-  return { body: await object.text(), etag: object.httpEtag }
+  if (!object || object.customMetadata?.deleted === "true") return undefined
+  return { body: await object.text(), etag: object.etag }
 }
 
 const listSnapshots = async (request: Request, environment: CloudflareEnvironment): Promise<ReadonlyArray<PublishedManifestEntry>> => {
@@ -147,15 +154,63 @@ const getPublishedDocuments = async (request: Request, environment: CloudflareEn
     return new Response(snapshot.body, {
       headers: {
         "Content-Type": "application/json; charset=utf-8",
-        "Cache-Control": "public, max-age=60, stale-while-revalidate=300",
+        "Cache-Control": "no-store",
         ETag: snapshot.etag,
         "X-Content-Type-Options": "nosniff",
       },
     })
   }
   return json({ documents: await listSnapshots(request, environment) }, {
-    headers: { "Cache-Control": "public, max-age=30, stale-while-revalidate=120" },
+    headers: { "Cache-Control": "no-store" },
   })
+}
+
+const deletePublishedDocument = async (request: Request, environment: CloudflareEnvironment): Promise<Response> => {
+  if (!environment.BEHOLD_PUBLISH_TOKEN?.trim()) return json({ error: "BEHOLD_PUBLISH_TOKEN is not configured." }, { status: 500 })
+  if (!await authorized(request, environment)) return json({ error: "Unauthorized." }, { status: 401, headers: { "Cache-Control": "no-store" } })
+
+  const url = new URL(request.url)
+  const slug = url.searchParams.get("slug")?.trim() ?? ""
+  const expectedExportedAt = url.searchParams.get("exportedAt")?.trim() ?? ""
+  if (!isPublishedSlug(slug)) return json({ error: "Invalid published document slug." }, { status: 400, headers: { "Cache-Control": "no-store" } })
+  if (!isExpectedExportedAt(expectedExportedAt)) return json({ error: "Invalid expected exportedAt." }, { status: 400, headers: { "Cache-Control": "no-store" } })
+
+  const key = objectKey(slug)
+  const stored = await loadSnapshot(environment, slug)
+  if (!stored) return json({ slug, deleted: false }, { status: 200, headers: { "Cache-Control": "no-store" } })
+
+  let snapshot: unknown
+  try {
+    snapshot = JSON.parse(stored.body)
+  } catch {
+    return json({ error: "Stored published document snapshot is invalid." }, { status: 500, headers: { "Cache-Control": "no-store" } })
+  }
+  if (!isPublishedSnapshot(snapshot)) return json({ error: "Stored published document snapshot is invalid." }, { status: 500, headers: { "Cache-Control": "no-store" } })
+  if (snapshot.exportedAt !== expectedExportedAt) {
+    return json({ slug, deleted: false, currentExportedAt: snapshot.exportedAt }, { status: 409, headers: { "Cache-Control": "no-store" } })
+  }
+
+  const tombstone = await environment.SNAPSHOTS.put(key, JSON.stringify({ deleted: true }), {
+    onlyIf: { etagMatches: stored.etag },
+    httpMetadata: {
+      contentType: "application/json; charset=utf-8",
+      cacheControl: "no-store",
+    },
+    customMetadata: { slug, deleted: "true" },
+  })
+  if (!tombstone) {
+    const current = await loadSnapshot(environment, slug)
+    if (!current) return json({ slug, deleted: false }, { status: 200, headers: { "Cache-Control": "no-store" } })
+    let currentExportedAt: string | undefined
+    try {
+      const payload = JSON.parse(current.body) as { readonly exportedAt?: unknown }
+      if (typeof payload.exportedAt === "string") currentExportedAt = payload.exportedAt
+    } catch {
+      // The subsequent request can report the invalid stored snapshot.
+    }
+    return json({ slug, deleted: false, ...(currentExportedAt ? { currentExportedAt } : {}) }, { status: 409, headers: { "Cache-Control": "no-store" } })
+  }
+  return json({ slug, deleted: true }, { status: 200, headers: { "Cache-Control": "no-store" } })
 }
 
 const publishDocument = async (request: Request, environment: CloudflareEnvironment): Promise<Response> => {
@@ -318,7 +373,7 @@ const publishedPage = async (request: Request, environment: CloudflareEnvironmen
   return new Response(shell, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=86400",
+      "Cache-Control": "no-store",
       "Referrer-Policy": "strict-origin-when-cross-origin",
       "X-Content-Type-Options": "nosniff",
     },
@@ -350,14 +405,15 @@ const landingPage = async (request: Request, environment: CloudflareEnvironment)
 export const handleCloudflareRequest = async (request: Request, environment: CloudflareEnvironment): Promise<Response> => {
   const url = new URL(request.url)
   if (request.method === "GET" && url.pathname === "/api/behold") {
-    return json({ protocol: "behold-publish/1", maxSnapshotBytes, capabilities: ["snapshots"] }, {
-      headers: { "Cache-Control": "public, max-age=300" },
+    return json({ protocol: "behold-publish/1", maxSnapshotBytes, capabilities: ["snapshots", "delete"] }, {
+      headers: { "Cache-Control": "no-store" },
     })
   }
   if (url.pathname === "/api/published-documents") {
     if (request.method === "GET") return getPublishedDocuments(request, environment)
     if (request.method === "POST") return publishDocument(request, environment)
-    return json({ error: "Method not allowed." }, { status: 405, headers: { Allow: "GET, POST" } })
+    if (request.method === "DELETE") return deletePublishedDocument(request, environment)
+    return json({ error: "Method not allowed." }, { status: 405, headers: { Allow: "GET, POST, DELETE" } })
   }
   if (request.method === "GET" && url.pathname === "/api/og-image") return ogImage(request, environment)
   if (url.pathname.startsWith("/api/")) return json({ error: "Not found." }, { status: 404 })

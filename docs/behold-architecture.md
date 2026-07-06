@@ -26,8 +26,11 @@ The local viewer is the sole owner of:
 - JSON persistence
 - browser event streams
 - long-poll feedback waiters
+- publication receipts and their reconciled remote status
 
 The MCP process is a thin HTTP client. It starts or reuses the viewer, invokes its API, and exits without taking ownership of local state.
+
+Mutating local requests carry `X-Behold-Request: 1`. Combined with loopback binding, strict host validation, and browser origin checks, this blocks cross-site mutation without introducing local accounts or login prompts.
 
 The packaged runtime stores state in the operating system's user data directory. `BEHOLD_DATA_DIR` can override that location. File-backed documents remain at their original paths.
 
@@ -55,6 +58,13 @@ Public reads do not require authentication:
 - `GET /api/published-documents` lists snapshots.
 - `GET /api/published-documents?slug=<slug>` returns one snapshot.
 - `GET /published/<slug>` serves its viewer shell.
+
+Publishing and deletion require the same bearer token. The local viewer keeps that token server-side and exposes browser actions through its loopback-only proxy:
+
+- `POST /api/publish-remote` publishes or updates a snapshot and records a local receipt.
+- `DELETE /api/publish-remote` deletes the exact snapshot identified by that receipt.
+
+At startup, the local runtime fetches the public manifest once and reconciles stored receipts. Missing snapshots are marked missing; transport failures are marked unavailable and never mistaken for deletion.
 
 Published payloads are schema-decoded and stripped of local document metadata before storage. Authored Markdown remains unchanged and must be reviewed before publishing.
 

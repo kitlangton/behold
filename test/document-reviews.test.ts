@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { Duration, Effect, Fiber } from "effect"
 import { afterEach, describe, expect, it } from "vitest"
 import { DocumentReviewInvalidAnchor, DocumentReviews, type CommentAnchor } from "../server/document-reviews"
+import type { PublicationReceipt } from "../shared/document-contracts"
 
 const roots: Array<string> = []
 let id = 0
@@ -30,6 +31,16 @@ const makeLayer = (root: string) =>
   })
 
 const run = <A, E>(root: string, effect: Effect.Effect<A, E, DocumentReviews.Service>) => Effect.runPromise(effect.pipe(Effect.provide(makeLayer(root))))
+
+const receipt = (overrides: Partial<PublicationReceipt> = {}): PublicationReceipt => ({
+  slug: "doc",
+  url: "https://example.com/doc",
+  exportedAt: "2026-01-01T00:00:00.000Z",
+  publishedRevisionId: "revision-1",
+  remoteStatus: "published",
+  checkedAt: "2026-01-01T00:00:00.000Z",
+  ...overrides,
+})
 
 describe("DocumentReviews", () => {
   it("migrates original pre-version stores with normalized defaults", async () => {
@@ -400,5 +411,137 @@ describe("DocumentReviews", () => {
     }))
 
     expect(revisions.map((revision) => revision.number)).toEqual([1, 2, 3, 4])
+  })
+
+  it("persists publication receipts across service restarts", async () => {
+    const root = await makeRoot()
+    const created = await run(root, Effect.gen(function*() {
+      const service = yield* DocumentReviews.Service
+      const submitted = yield* service.submitDocument({ markdown: "# Published" })
+      const publication = receipt({ publishedRevisionId: submitted.revision!.id })
+      const updated = yield* service.setPublicationReceipt(submitted.document.id, publication)
+      const receipts = yield* service.listPublicationReceipts()
+      return { documentId: submitted.document.id, updated, receipts, publication }
+    }))
+
+    expect(created.updated.publication).toEqual(created.publication)
+    expect(created.receipts).toEqual([{ documentId: created.documentId, publication: created.publication }])
+
+    const restarted = await run(root, Effect.gen(function*() {
+      const service = yield* DocumentReviews.Service
+      return {
+        doc: yield* service.getDocument(created.documentId),
+        receipts: yield* service.listPublicationReceipts(),
+      }
+    }))
+
+    expect(restarted.doc.publication).toEqual(created.publication)
+    expect(restarted.receipts).toEqual([{ documentId: created.documentId, publication: created.publication }])
+  })
+
+  it("preserves publication receipts across revision retention", async () => {
+    const root = await makeRoot()
+    const result = await run(root, Effect.gen(function*() {
+      const service = yield* DocumentReviews.Service
+      const submitted = yield* service.submitDocument({ markdown: "# Published" })
+      const publication = receipt({ publishedRevisionId: submitted.revision!.id })
+      yield* service.setPublicationReceipt(submitted.document.id, publication)
+      for (let version = 2; version <= 26; version++) {
+        yield* service.reviseDocument(submitted.document.id, `# Published\n${version}`)
+      }
+      return {
+        document: yield* service.getDocument(submitted.document.id),
+        revisions: yield* service.listRevisions(submitted.document.id),
+      }
+    }))
+
+    expect(result.revisions).toHaveLength(21)
+    expect(result.document.publication?.publishedRevisionId).toBe("id-2")
+    expect(result.document.publication?.url).toBe("https://example.com/doc")
+  })
+
+  it("updates publication receipt status without changing document revision metadata", async () => {
+    const root = await makeRoot()
+    const result = await run(root, Effect.gen(function*() {
+      const service = yield* DocumentReviews.Service
+      const submitted = yield* service.submitDocument({ markdown: "# Published" })
+      const before = yield* service.getDocument(submitted.document.id)
+      const first = receipt({ publishedRevisionId: submitted.revision!.id, remoteStatus: "published", checkedAt: "check-1" })
+      yield* service.setPublicationReceipt(submitted.document.id, first)
+      const second = { ...first, remoteStatus: "missing" as const, checkedAt: "check-2" }
+      const updated = yield* service.setPublicationReceipt(submitted.document.id, second)
+      return { before, updated, after: yield* service.getDocument(submitted.document.id) }
+    }))
+
+    expect(result.updated.publication?.remoteStatus).toBe("missing")
+    expect(result.updated.publication?.checkedAt).toBe("check-2")
+    expect(result.after.updatedAt).toBe(result.before.updatedAt)
+    expect(result.after.currentRevisionId).toBe(result.before.currentRevisionId)
+    expect(result.after.version).toBe(result.before.version)
+  })
+
+  it("only conditionally clears matching publication receipts", async () => {
+    const root = await makeRoot()
+    const result = await run(root, Effect.gen(function*() {
+      const service = yield* DocumentReviews.Service
+      const submitted = yield* service.submitDocument({ markdown: "# Published" })
+      const older = receipt({ exportedAt: "older", publishedRevisionId: submitted.revision!.id })
+      const newer = { ...older, exportedAt: "newer" }
+      yield* service.setPublicationReceipt(submitted.document.id, older)
+      yield* service.setPublicationReceipt(submitted.document.id, newer)
+      const skipped = yield* service.clearPublicationReceipt(submitted.document.id, "older")
+      const afterSkipped = yield* service.getDocument(submitted.document.id)
+      const cleared = yield* service.clearPublicationReceipt(submitted.document.id, "newer")
+      const afterCleared = yield* service.getDocument(submitted.document.id)
+      return { skipped, afterSkipped, cleared, afterCleared }
+    }))
+
+    expect(result.skipped).toBe(false)
+    expect(result.afterSkipped.publication?.exportedAt).toBe("newer")
+    expect(result.cleared).toBe(true)
+    expect(result.afterCleared.publication).toBeUndefined()
+  })
+
+  it("moves duplicate publication URL ownership to the most recent document", async () => {
+    const root = await makeRoot()
+    const result = await run(root, Effect.gen(function*() {
+      const service = yield* DocumentReviews.Service
+      const first = yield* service.submitDocument({ markdown: "# First" })
+      const second = yield* service.submitDocument({ markdown: "# Second" })
+      yield* service.setPublicationReceipt(first.document.id, receipt({ slug: "first", publishedRevisionId: first.revision!.id }))
+      const secondReceipt = receipt({ slug: "second", publishedRevisionId: second.revision!.id })
+      yield* service.setPublicationReceipt(second.document.id, secondReceipt)
+      return {
+        first: yield* service.getDocument(first.document.id),
+        second: yield* service.getDocument(second.document.id),
+        receipts: yield* service.listPublicationReceipts(),
+      }
+    }))
+
+    expect(result.first.publication).toBeUndefined()
+    expect(result.second.publication?.slug).toBe("second")
+    expect(result.receipts).toHaveLength(1)
+    expect(result.receipts[0]?.documentId).toBe(result.second.id)
+  })
+
+  it("loads V2 stores without publication receipts", async () => {
+    const root = await makeRoot()
+    await writeFile(
+      join(root, "store.json"),
+      JSON.stringify({
+        schemaVersion: 2,
+        documents: [{ id: "doc-old-v2", title: "Old V2", markdown: "# Old V2", createdAt: "created", updatedAt: "updated", version: 1, currentRevisionId: "rev-old-v2" }],
+        revisions: { "doc-old-v2": [{ id: "rev-old-v2", number: 1, documentId: "doc-old-v2", title: "Old V2", markdown: "# Old V2", contentHash: "hash", createdAt: "created" }] },
+        comments: {},
+      }),
+    )
+
+    const result = await run(root, Effect.gen(function*() {
+      const service = yield* DocumentReviews.Service
+      return { doc: yield* service.getDocument("doc-old-v2"), receipts: yield* service.listPublicationReceipts() }
+    }))
+
+    expect(result.doc.publication).toBeUndefined()
+    expect(result.receipts).toEqual([])
   })
 })

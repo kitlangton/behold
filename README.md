@@ -1,6 +1,6 @@
 # Behold
 
-Behold is a local-first Markdown workspace for presenting agent work and collecting browser feedback. Its MCP server hosts documents in a persistent local viewer at `http://behold.localhost:5173`.
+Behold is a local-first Markdown workspace for presenting agent work and collecting browser feedback. Its MCP server hosts documents in a persistent local viewer at `http://127.0.0.1:5173`.
 
 Local review works without a Behold account or cloud deployment. Optional public snapshots are deployed to a Cloudflare account you own.
 
@@ -60,9 +60,11 @@ The Deploy button creates the public viewer and storage in your Cloudflare accou
    bunx @kitlangton/behold start
    ```
 
-5. Open `http://behold.localhost:5173`, host a document, and select **Publish**. The published URL should use your Cloudflare Worker origin.
+5. Open `http://127.0.0.1:5173`, host a document, and select **Publish**. The published URL should use your Cloudflare Worker origin.
 
 Behold removes local source-path metadata from published snapshots. Authored Markdown is published as written, so review it for private paths or other sensitive text before publishing. Cloudflare serves snapshots from your Worker and user-owned R2 bucket.
+
+Behold remembers each hosted document's public URL locally. On startup it checks those receipts against Cloudflare, so the document actions show **Published**, **Update**, **Republish**, or **Status unavailable** accurately. Use **Open** to view the public copy and **Unpublish** to remove it with the same private publish token.
 
 See [`docs/behold-architecture.md`](docs/behold-architecture.md) for the local and public system boundaries.
 
@@ -86,6 +88,8 @@ Behold stores local documents and runtime metadata in the operating system's use
 - Windows: `%LOCALAPPDATA%\Behold`
 
 Set `BEHOLD_DATA_DIR` to override the location. Local documents remain private unless you explicitly publish a frozen snapshot from the browser.
+
+The local server requires no login. It binds to loopback and rejects unrecognized hosts and cross-site browser mutations.
 
 ## Development
 

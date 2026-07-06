@@ -29,12 +29,13 @@ import {
   loadRemoteMarkdown,
   publishDocumentSnapshot,
   runDocumentViewerPromise,
+  unpublishHostedDocument,
   updateDocumentCommentContent,
   type DocumentComment,
   type DocumentCommentAnchor,
   type DocumentCommentLocation,
   type DocumentRevision,
-  type PublishRemoteResult,
+  type PublicationReceipt,
   type RecentDocument,
   type RenderedDocument,
   type RenderedDocumentSection,
@@ -769,9 +770,10 @@ export interface RailProps {
   readonly publishedTitle: string
   readonly publishedSlug: string
   readonly publishStatus: string
-  readonly publishedRemote: PublishRemoteResult | null
+  readonly publication: PublicationReceipt | null
   readonly publishing: boolean
   readonly hasDocument: boolean
+  readonly canPublish: boolean
   readonly recentDocuments: ReadonlyArray<RecentDocument>
   readonly activeDocumentId: string
   readonly revisions: ReadonlyArray<DocumentRevision>
@@ -788,6 +790,7 @@ export interface RailProps {
   readonly showActions: boolean
   readonly hasPublishedSnapshot: boolean
   readonly onPublish: () => void
+  readonly onUnpublish: () => void
   readonly onCopyAnnotations: () => void
   readonly onCopyMarkdown: () => void
   readonly onClearComments: () => void
@@ -799,6 +802,21 @@ export interface RailProps {
 }
 
 export function RailContent(props: RailProps) {
+  const publicationIsCurrent = () => props.publication?.publishedRevisionId === props.currentRevisionId
+  const publicationLabel = () => {
+    const publication = props.publication
+    if (!publication) return "Publish"
+    if (publication.remoteStatus === "missing") return "Republish"
+    if (publication.remoteStatus === "unavailable") return publicationIsCurrent() ? "Retry" : "Update"
+    return publicationIsCurrent() ? "Published" : "Update"
+  }
+  const publicationStatus = () => {
+    const publication = props.publication
+    if (!publication) return ""
+    if (publication.remoteStatus === "missing") return "Remote copy missing"
+    if (publication.remoteStatus === "unavailable") return "Remote status unavailable"
+    return publicationIsCurrent() ? "Current version is public" : "A newer local version is available"
+  }
   return (
     <div class="rail-content">
       <DocumentOutline entries={props.headings} />
@@ -807,13 +825,25 @@ export function RailContent(props: RailProps) {
         <div class="rail-block">
           <p class="rail-label">Document</p>
           <div class="rail-actions">
-            <Show
-              when={props.hasDocument}
-              fallback={<button type="button" class="action" onClick={props.onCopyMarkdown}>Copy Markdown</button>}
-            >
-              <button type="button" class="action action-accent" onClick={props.onPublish} disabled={props.publishing}>{props.publishing ? "Publishing…" : "Publish"}</button>
+            <Show when={props.hasDocument} fallback={<button type="button" class="action" onClick={props.onCopyMarkdown}>Copy Markdown</button>}>
+              <Show when={props.publication} fallback={
+                <Show when={props.canPublish} fallback={<button type="button" class="action" onClick={props.onCopyMarkdown}>Copy Markdown</button>}>
+                  <button type="button" class="action action-accent" onClick={props.onPublish} disabled={props.publishing}>{props.publishing ? "Publishing…" : "Publish"}</button>
+                </Show>
+              }>
+                {(publication) => (
+                  <>
+                    <Show when={publicationLabel() !== "Published"}>
+                      <button type="button" class="action action-accent" onClick={props.onPublish} disabled={props.publishing || !props.canPublish}>{props.publishing ? "Working…" : publicationLabel()}</button>
+                    </Show>
+                    <a class="action" href={publication().url} target="_blank" rel="noreferrer">Open</a>
+                    <button type="button" class="action action-danger" onClick={props.onUnpublish} disabled={props.publishing}>Unpublish</button>
+                  </>
+                )}
+              </Show>
             </Show>
           </div>
+          <Show when={props.publication}><p class="rail-text">{publicationStatus()}</p></Show>
         </div>
       </Show>
 
@@ -850,11 +880,9 @@ export function RailContent(props: RailProps) {
         </div>
       </Show>
 
-      <Show when={!props.isPublishedView && (props.publishStatus || props.publishedRemote)}>
+      <Show when={!props.isPublishedView && props.publishStatus}>
         <div class="rail-block">
-          <Show when={props.publishedRemote} fallback={<p class="rail-text">{props.publishStatus}</p>}>
-            {(remote) => <a class="rail-link" href={remote().url} target="_blank" rel="noreferrer">{remote().url.replace(/^https?:\/\//, "")}</a>}
-          </Show>
+          <p class="rail-text">{props.publishStatus}</p>
         </div>
       </Show>
 
@@ -1006,7 +1034,7 @@ export default function App() {
   const [activeDocumentId, setActiveDocumentId] = createSignal(initialDocumentId)
   const [publishedSnapshot, setPublishedSnapshot] = createSignal<PublishedDocumentSnapshot | null>(null)
   const [publishStatus, setPublishStatus] = createSignal("")
-  const [publishedRemote, setPublishedRemote] = createSignal<PublishRemoteResult | null>(null)
+  const [publication, setPublication] = createSignal<PublicationReceipt | null>(null)
   const [publishing, setPublishing] = createSignal(false)
   const [recentDocuments, setRecentDocuments] = createSignal<ReadonlyArray<RecentDocument>>([])
   const [revisions, setRevisions] = createSignal<ReadonlyArray<DocumentRevision>>([])
@@ -1029,6 +1057,14 @@ export default function App() {
   const editorOpen = () => !isPublishedView && initialDocumentId === "" && initialMarkdownUrl === ""
   const headings = createMemo(() => extractHeadings(editorOpen() && !document() ? landingMarkdown : renderedMarkdown()))
   const canPublish = () => !!document() && (!activeDocumentId() || (!diffView() && displayedRevisionId() === currentRevisionId()))
+  const publicationIsCurrent = () => publication()?.publishedRevisionId === currentRevisionId()
+  const publicationActionLabel = () => {
+    const receipt = publication()
+    if (!receipt) return "Publish"
+    if (receipt.remoteStatus === "missing") return "Republish"
+    if (receipt.remoteStatus === "unavailable") return publicationIsCurrent() ? "Retry" : "Update"
+    return publicationIsCurrent() ? "Published" : "Update"
+  }
   const displayedComments = createMemo<ReadonlyArray<DocumentComment>>(() => {
     const snapshot = publishedSnapshot()
     if (!isPublishedView || !snapshot) return comments()
@@ -1152,6 +1188,7 @@ export default function App() {
     if (!documentId) return
     const wasViewingCurrent = !displayedRevisionId() || displayedRevisionId() === currentRevisionId()
     const nextDocument = await runDocumentViewerPromise(loadHostedDocument(documentId), signal)
+    setPublication(nextDocument.publication ?? null)
     if (nextDocument.updatedAt === activeDocumentUpdatedAtRef) return
     activeDocumentUpdatedAtRef = nextDocument.updatedAt
     setCurrentRevisionId(nextDocument.currentRevisionId)
@@ -1199,7 +1236,7 @@ export default function App() {
     const currentDocument = document()
     if (!currentDocument) return null
     const title = headings()[0]?.text ?? (activeDocumentId() ? `Hosted ${activeDocumentId()}` : "Behold")
-    const slugBase = publishedSnapshot()?.slug ?? title
+    const slugBase = publication()?.slug ?? publishedSnapshot()?.slug ?? title
     return preparePublishedSnapshot({
       slug: slugify(slugBase),
       title,
@@ -1221,14 +1258,19 @@ export default function App() {
       showToast({ variant: "error", description: "Nothing to publish yet." })
       return
     }
-    const slugInput = window.prompt("Publish slug", snapshot.slug)
+    const existingPublication = publication()
+    const slugInput = existingPublication?.slug ?? window.prompt("Publish slug", snapshot.slug)
     if (slugInput === null) return
     const nextSnapshot: PublishedDocumentSnapshot = { ...snapshot, slug: slugify(slugInput), exportedAt: new Date().toISOString() }
     setPublishing(true)
     setPublishStatus("Publishing…")
     try {
-      const result = await runDocumentViewerPromise(publishDocumentSnapshot(nextSnapshot))
-      setPublishedRemote(result)
+      const documentId = activeDocumentId()
+      const result = await runDocumentViewerPromise(publishDocumentSnapshot(
+        nextSnapshot,
+        documentId ? { documentId, revisionId: currentRevisionId() } : undefined,
+      ))
+      setPublication(result.publication ?? null)
       setPublishStatus(result.updated ? `Updated ${result.url}` : `Published ${result.url}`)
       showToast({ variant: "success", description: result.updated ? `Updated ${result.url}` : `Published ${result.url}` })
     } catch (error) {
@@ -1240,11 +1282,34 @@ export default function App() {
     }
   }
 
+  const unpublishCurrentDocument = async () => {
+    const documentId = activeDocumentId()
+    const receipt = publication()
+    if (!documentId || !receipt) return
+    if (!window.confirm(`Unpublish “${receipt.slug}”? The public URL will stop working.`)) return
+    setPublishing(true)
+    setPublishStatus("Unpublishing…")
+    try {
+      await runDocumentViewerPromise(unpublishHostedDocument(documentId))
+      setPublication(null)
+      setPublishStatus("Public snapshot removed.")
+      showToast({ variant: "success", description: "Public snapshot removed." })
+      await refreshRecentDocuments()
+    } catch (error) {
+      const message = errorMessage(error, "Unable to unpublish document.")
+      setPublishStatus(message)
+      showToast({ variant: "error", description: message })
+    } finally {
+      setPublishing(false)
+    }
+  }
+
   const deleteCurrentDocument = async () => {
     const documentId = activeDocumentId()
     if (!documentId) return
     const title = headings()[0]?.text ?? "this hosted document"
-    if (!window.confirm(`Delete “${title}” and its comments?`)) return
+    const publicNote = publication() ? " Its public snapshot will remain available." : ""
+    if (!window.confirm(`Delete “${title}” and its comments?${publicNote}`)) return
 
     setDeletingDocument(true)
     try {
@@ -1572,6 +1637,7 @@ export default function App() {
           setActiveDocumentId(documentId)
           setCurrentRevisionId(result.currentRevisionId)
           setDisplayedRevisionId(result.revisionId)
+          setPublication(result.publication ?? null)
           setRenderedMarkdown(result.markdown)
           await refreshRevisions(documentId, controller.signal)
           setSourceStatus("")
@@ -1682,6 +1748,15 @@ export default function App() {
         })
       }
     }
+    const onPublicationUpdated = (event: MessageEvent<string>) => {
+      const payload = parseEvent(event)
+      if (payload?.documentId && payload.documentId === activeDocumentIdRef) {
+        const controller = replaceController("document")
+        void refreshActiveDocument(controller.signal).catch((error) => {
+          if (!controller.signal.aborted) showToast({ variant: "error", description: errorMessage(error, "Unable to refresh publication status.") })
+        })
+      }
+    }
     const onRecentDocumentsUpdated = () => {
       const controller = replaceController("recent")
       void refreshRecentDocuments(controller.signal).catch((error) => {
@@ -1695,11 +1770,13 @@ export default function App() {
     source.addEventListener("document-updated", onDocumentUpdated as EventListener)
     source.addEventListener("document-deleted", onDocumentDeleted as EventListener)
     source.addEventListener("comments-updated", onCommentsUpdated as EventListener)
+    source.addEventListener("publication-updated", onPublicationUpdated as EventListener)
     source.addEventListener("recent-documents-updated", onRecentDocumentsUpdated)
     onCleanup(() => {
       source.removeEventListener("document-updated", onDocumentUpdated as EventListener)
       source.removeEventListener("document-deleted", onDocumentDeleted as EventListener)
       source.removeEventListener("comments-updated", onCommentsUpdated as EventListener)
+      source.removeEventListener("publication-updated", onPublicationUpdated as EventListener)
       source.removeEventListener("recent-documents-updated", onRecentDocumentsUpdated)
       source.close()
       refreshControllers.document?.abort()
@@ -1734,9 +1811,10 @@ export default function App() {
       publishedTitle={publishedSnapshot()?.title ?? ""}
       publishedSlug={initialPublishedSlug}
       publishStatus={publishStatus()}
-      publishedRemote={publishedRemote()}
+      publication={publication()}
       publishing={publishing()}
-      hasDocument={canPublish()}
+      hasDocument={document() !== null}
+      canPublish={canPublish()}
       recentDocuments={recentDocuments()}
       activeDocumentId={activeDocumentId()}
       revisions={revisions()}
@@ -1753,6 +1831,7 @@ export default function App() {
       showActions={mobile}
       hasPublishedSnapshot={publishedSnapshot() !== null}
       onPublish={() => void publishCurrentDocument()}
+      onUnpublish={() => void unpublishCurrentDocument()}
       onCopyAnnotations={copyAnnotations}
       onCopyMarkdown={copyMarkdown}
       onClearComments={() => void clearAllComments()}
@@ -1782,11 +1861,25 @@ export default function App() {
             <BeholdWordmark />
             <nav class="topbar-tabs" aria-label="Document actions">
               <Show when={isPublishedView} fallback={
-                <Show
-                  when={canPublish()}
-                  fallback={<button type="button" class="tab tab-desktop" onClick={copyMarkdown}>Copy Markdown</button>}
-                >
-                  <button type="button" class="tab tab-desktop" onClick={() => void publishCurrentDocument()} disabled={publishing()}>{publishing() ? "Publishing…" : "Publish"}</button>
+                <Show when={publication()} fallback={
+                  <Show when={canPublish()} fallback={<button type="button" class="tab tab-desktop" onClick={copyMarkdown}>Copy Markdown</button>}>
+                    <button type="button" class="tab tab-desktop" onClick={() => void publishCurrentDocument()} disabled={publishing()}>{publishing() ? "Publishing…" : "Publish"}</button>
+                  </Show>
+                }>
+                  {(receipt) => (
+                    <>
+                      <button
+                        type="button"
+                        class="tab tab-desktop"
+                        onClick={() => void publishCurrentDocument()}
+                        disabled={publishing() || !canPublish() || publicationActionLabel() === "Published"}
+                      >
+                        {publishing() ? "Working…" : publicationActionLabel()}
+                      </button>
+                      <a class="tab tab-desktop" href={receipt().url} target="_blank" rel="noreferrer">Open</a>
+                      <button type="button" class="tab tab-desktop" onClick={() => void unpublishCurrentDocument()} disabled={publishing()}>Unpublish</button>
+                    </>
+                  )}
                 </Show>
               }>
                 <button type="button" class="tab tab-desktop" onClick={copyAnnotations} disabled={!publishedSnapshot()}>Copy annotations</button>

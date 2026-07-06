@@ -31,7 +31,7 @@ afterEach(async () => {
 
 const makeClient = async () => {
   const port = 20_000 + Math.floor(Math.random() * 20_000)
-  const origin = `http://behold.localhost:${port}`
+  const origin = `http://127.0.0.1:${port}`
   const dataDirectory = await mkdtemp(join(tmpdir(), "behold-mcp-"))
   directories.push(dataDirectory)
   runtimes.push({ root: process.cwd(), origin, dataDirectory })
@@ -99,14 +99,14 @@ describe("Behold MCP", () => {
     const created = (await client.call("host_document", {
       markdown: "# MCP test\n\nReview this sentence.",
     })) as { id: string; url: string; version: number; currentRevisionId: string; revisionId: string }
-    expect(new URL(created.url).hostname).toBe("behold.localhost")
+    expect(new URL(created.url).hostname).toBe("127.0.0.1")
     expect(created.version).toBe(1)
     expect(created.currentRevisionId).toBe(created.revisionId)
 
     const waiting = client.call("wait_for_feedback", { documentId: created.id, timeoutSeconds: 10 })
     const commentResponse = await fetch(`${client.origin}/api/documents/${created.id}/comments`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-behold-request": "1" },
       body: JSON.stringify({
         content: "Please revise this.",
         location: {

@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, stat } from "node:fs/promises"
 import { basename, dirname, resolve } from "node:path"
 import { createTwoFilesPatch } from "diff"
 import { Context, Duration, Effect, Layer, Option, PubSub, Schema, Stream, SynchronizedRef } from "effect"
+import { PublicationReceiptSchema, type PublicationReceipt } from "../shared/document-contracts"
 import { createSerializedAtomicJsonWriter, type SerializedAtomicJsonWriter } from "./serialized-atomic-json-writer"
 
 const normalizeMarkdown = (markdown: string) => markdown.replace(/\r\n?/g, "\n")
@@ -81,6 +82,7 @@ export const StoredDocument = Schema.Struct({
   sourcePath: Schema.optionalKey(Schema.String),
   version: Schema.Number,
   currentRevisionId: Schema.String,
+  publication: Schema.optionalKey(PublicationReceiptSchema),
 })
 export interface StoredDocument extends Schema.Schema.Type<typeof StoredDocument> {}
 
@@ -165,6 +167,12 @@ export type DocumentReviewEvent =
   | { readonly _tag: "document-updated"; readonly documentId: string; readonly revisionId: string; readonly outcome: SubmitOutcome }
   | { readonly _tag: "document-deleted"; readonly documentId: string }
   | { readonly _tag: "comments-updated"; readonly documentId: string }
+  | { readonly _tag: "publication-updated"; readonly documentId: string; readonly publication?: PublicationReceipt }
+
+export interface PublicationReceiptEntry {
+  readonly documentId: string
+  readonly publication: PublicationReceipt
+}
 
 export interface SubmitDocumentInput {
   readonly markdown: string
@@ -457,6 +465,9 @@ export interface Interface {
     readonly submitDocument: (input: SubmitDocumentInput) => Effect.Effect<SubmitResult, DocumentReviewInvalidInput | DocumentReviewPersistenceError>
     readonly reviseDocument: (documentId: string, markdown: string) => Effect.Effect<SubmitResult, DocumentReviewNotFound | DocumentReviewInvalidInput | DocumentReviewPersistenceError>
     readonly listDocuments: () => Effect.Effect<ReadonlyArray<StoredDocument>>
+    readonly listPublicationReceipts: () => Effect.Effect<ReadonlyArray<PublicationReceiptEntry>>
+    readonly setPublicationReceipt: (documentId: string, receipt: PublicationReceipt) => Effect.Effect<StoredDocument, DocumentReviewNotFound | DocumentReviewPersistenceError>
+    readonly clearPublicationReceipt: (documentId: string, expectedExportedAt?: string) => Effect.Effect<boolean, DocumentReviewNotFound | DocumentReviewPersistenceError>
     readonly getDocument: (documentId: string, revisionId?: string) => Effect.Effect<StoredDocument & { readonly revision: Revision }, DocumentReviewNotFound>
     readonly listRevisions: (documentId: string) => Effect.Effect<ReadonlyArray<Revision>, DocumentReviewNotFound>
     readonly diffRevisions: (documentId: string, fromRevisionId: string, toRevisionId: string) => Effect.Effect<RevisionDiff, DocumentReviewNotFound>
@@ -590,6 +601,42 @@ export const layer = (rawOptions: DocumentReviewsOptions): Layer.Layer<Service, 
           const state = yield* SynchronizedRef.get(ref)
           return state.store.documents
         }),
+        listPublicationReceipts: Effect.fn("DocumentReviews.listPublicationReceipts")(function*() {
+          const state = yield* SynchronizedRef.get(ref)
+          return state.store.documents.flatMap((document) => document.publication ? [{ documentId: document.id, publication: document.publication }] : [])
+        }),
+        setPublicationReceipt: Effect.fn("DocumentReviews.setPublicationReceipt")(function*(documentId: string, receipt: PublicationReceipt) {
+          return yield* mutate((state) => Effect.gen(function*() {
+            const document = yield* requireDocument(state.store, documentId)
+            const updated = { ...document, publication: receipt }
+            const clearedDocumentIds: Array<string> = []
+            const documents = state.store.documents.map((item) => {
+              if (item.id === documentId) return updated
+              if (item.publication?.url === receipt.url) {
+                clearedDocumentIds.push(item.id)
+                return { ...item, publication: undefined }
+              }
+              return item
+            })
+            const store = { ...state.store, documents }
+            return [updated, { ...state, store }, [
+              ...clearedDocumentIds.map((clearedDocumentId) => ({ _tag: "publication-updated", documentId: clearedDocumentId }) satisfies DocumentReviewEvent),
+              { _tag: "publication-updated", documentId, publication: receipt } satisfies DocumentReviewEvent,
+            ]] as const
+          }))
+        }) as Interface["setPublicationReceipt"],
+        clearPublicationReceipt: Effect.fn("DocumentReviews.clearPublicationReceipt")(function*(documentId: string, expectedExportedAt?: string) {
+          return yield* mutate((state) => Effect.gen(function*() {
+            const document = yield* requireDocument(state.store, documentId)
+            const existing = document.publication
+            if (!existing || (expectedExportedAt !== undefined && existing.exportedAt !== expectedExportedAt)) {
+              return [false, state, []] as const
+            }
+            const updated = { ...document, publication: undefined }
+            const store = { ...state.store, documents: state.store.documents.map((item) => (item.id === documentId ? updated : item)) }
+            return [true, { ...state, store }, [{ _tag: "publication-updated", documentId } satisfies DocumentReviewEvent]] as const
+          }))
+        }) as Interface["clearPublicationReceipt"],
         getDocument: Effect.fn("DocumentReviews.getDocument")(function*(documentId: string, revisionId?: string) {
           const state = yield* SynchronizedRef.get(ref)
           const document = yield* requireDocument(state.store, documentId)

@@ -24,6 +24,7 @@ Vite mounts the local API during development. The packaged daemon serves built a
 - Public snapshots and manifests must never expose local filesystem paths.
 - Reposting a `filePath` updates the same hosted document id.
 - Deleting a local document never deletes an independently published snapshot.
+- Hosted documents retain a local publication receipt; startup reconciliation updates its remote status without treating network failure as deletion.
 - Document updates retain the current revision plus 20 previous revisions.
 - `wait_for_feedback` currently reads and acknowledges feedback in one MCP call.
 
@@ -89,6 +90,7 @@ The public deployment uses a `BEHOLD_PUBLISH_TOKEN` Worker secret and an R2 buck
 
 - Never commit `.env.local`, `.dev.vars`, credentials, local document data, or generated runtime state.
 - Behold strips snapshot metadata that identifies local documents. Authored Markdown is published verbatim and must be reviewed before publishing.
+- The publish token authorizes both publishing and unpublishing; it is never exposed to the browser or public Worker responses.
 - Keep local file access loopback-only unless paths are explicitly allowed through `BEHOLD_ALLOWED_FILE_ROOTS`.
 
 ## Commands

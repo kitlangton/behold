@@ -6,7 +6,7 @@ import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { readBeholdLocalEnvironment, resolveBeholdDataDirectory } from "./behold-home"
 
-export const canonicalViewerOrigin = "http://behold.localhost:5173"
+export const canonicalViewerOrigin = "http://127.0.0.1:5173"
 
 const lifecycleVersion = 1
 const lockStaleAfterMs = 30_000

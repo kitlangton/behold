@@ -15,13 +15,17 @@ vi.mock("../cloudflare/og-image", () => ({
 interface StoredValue {
   readonly body: string
   readonly customMetadata: Record<string, string>
+  readonly etag: string
 }
 
 const values = new Map<string, StoredValue>()
+let nextEtag = 1
+let beforeConditionalPut: (() => void) | undefined
 
 const storedObject = (key: string, value: StoredValue) => ({
   key,
-  httpEtag: `"${key}-etag"`,
+  etag: value.etag,
+  httpEtag: `"${value.etag}"`,
   customMetadata: value.customMetadata,
 })
 
@@ -42,7 +46,13 @@ const environment = (): CloudflareEnvironment => ({
       return value ? storedObject(key, value) : null
     },
     put: async (key, body, options) => {
-      const value = { body, customMetadata: options.customMetadata }
+      if (options.onlyIf) {
+        const hook = beforeConditionalPut
+        beforeConditionalPut = undefined
+        hook?.()
+        if (values.get(key)?.etag !== options.onlyIf.etagMatches) return null
+      }
+      const value = { body, customMetadata: options.customMetadata, etag: `etag-${nextEtag++}` }
       values.set(key, value)
       return storedObject(key, value)
     },
@@ -68,6 +78,8 @@ const snapshot = (title = "Cloudflare publish"): PublishedDocumentSnapshot => ({
 describe("Cloudflare publishing worker", () => {
   beforeEach(() => {
     values.clear()
+    nextEtag = 1
+    beforeConditionalPut = undefined
     renderedCards.length = 0
   })
 
@@ -78,8 +90,9 @@ describe("Cloudflare publishing worker", () => {
     expect(await response.json()).toEqual({
       protocol: "behold-publish/1",
       maxSnapshotBytes: 4 * 1024 * 1024,
-      capabilities: ["snapshots"],
+      capabilities: ["snapshots", "delete"],
     })
+    expect(response.headers.get("Cache-Control")).toBe("no-store")
   })
 
   it("requires auth, publishes a sanitized snapshot, and reports updates", async () => {
@@ -131,7 +144,114 @@ describe("Cloudflare publishing worker", () => {
 
     const get = await handleCloudflareRequest(new Request("https://behold.example/api/published-documents?slug=cloudflare-publish"), environment())
     expect(get.status).toBe(200)
+    expect(get.headers.get("Cache-Control")).toBe("no-store")
     expect((await get.json() as { title: string }).title).toBe("Cloudflare publish")
+  })
+
+  it("requires auth and validates query params before deleting published snapshots", async () => {
+    const unauthorized = await handleCloudflareRequest(new Request("https://behold.example/api/published-documents?slug=cloudflare-publish&exportedAt=2026-07-05T20%3A00%3A00.000Z", {
+      method: "DELETE",
+    }), environment())
+    expect(unauthorized.status).toBe(401)
+
+    const invalidSlug = await handleCloudflareRequest(new Request("https://behold.example/api/published-documents?slug=../private&exportedAt=2026-07-05T20%3A00%3A00.000Z", {
+      method: "DELETE",
+      headers: { Authorization: "Bearer publish-secret" },
+    }), environment())
+    expect(invalidSlug.status).toBe(400)
+
+    const invalidDate = await handleCloudflareRequest(new Request("https://behold.example/api/published-documents?slug=cloudflare-publish&exportedAt=not-a-date", {
+      method: "DELETE",
+      headers: { Authorization: "Bearer publish-secret" },
+    }), environment())
+    expect(invalidDate.status).toBe(400)
+  })
+
+  it("reports a successful no-op when deleting a missing published snapshot", async () => {
+    const response = await handleCloudflareRequest(new Request("https://behold.example/api/published-documents?slug=cloudflare-publish&exportedAt=2026-07-05T20%3A00%3A00.000Z", {
+      method: "DELETE",
+      headers: { Authorization: "Bearer publish-secret" },
+    }), environment())
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("Cache-Control")).toBe("no-store")
+    expect(await response.json()).toEqual({ slug: "cloudflare-publish", deleted: false })
+  })
+
+  it("rejects deletion when the current exportedAt does not match", async () => {
+    await handleCloudflareRequest(new Request("https://behold.example/api/published-documents", {
+      method: "POST",
+      headers: { Authorization: "Bearer publish-secret" },
+      body: JSON.stringify(snapshot()),
+    }), environment())
+
+    const response = await handleCloudflareRequest(new Request("https://behold.example/api/published-documents?slug=cloudflare-publish&exportedAt=2026-07-05T21%3A00%3A00.000Z", {
+      method: "DELETE",
+      headers: { Authorization: "Bearer publish-secret" },
+    }), environment())
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({
+      slug: "cloudflare-publish",
+      deleted: false,
+      currentExportedAt: "2026-07-05T20:00:00.000Z",
+    })
+    expect(values.has("published/cloudflare-publish.json")).toBe(true)
+  })
+
+  it("deletes a published snapshot only when exportedAt matches and list/get stop advertising it", async () => {
+    await handleCloudflareRequest(new Request("https://behold.example/api/published-documents", {
+      method: "POST",
+      headers: { Authorization: "Bearer publish-secret" },
+      body: JSON.stringify(snapshot()),
+    }), environment())
+
+    const deleted = await handleCloudflareRequest(new Request("https://behold.example/api/published-documents?slug=cloudflare-publish&exportedAt=2026-07-05T20%3A00%3A00.000Z", {
+      method: "DELETE",
+      headers: { Authorization: "Bearer publish-secret" },
+    }), environment())
+    expect(deleted.status).toBe(200)
+    expect(await deleted.json()).toEqual({ slug: "cloudflare-publish", deleted: true })
+
+    const list = await handleCloudflareRequest(new Request("https://behold.example/api/published-documents"), environment())
+    expect(list.headers.get("Cache-Control")).toBe("no-store")
+    expect(await list.json()).toEqual({ documents: [] })
+
+    const get = await handleCloudflareRequest(new Request("https://behold.example/api/published-documents?slug=cloudflare-publish"), environment())
+    expect(get.status).toBe(404)
+  })
+
+  it("does not tombstone a newer snapshot published during deletion", async () => {
+    await handleCloudflareRequest(new Request("https://behold.example/api/published-documents", {
+      method: "POST",
+      headers: { Authorization: "Bearer publish-secret" },
+      body: JSON.stringify(snapshot("Old")),
+    }), environment())
+    beforeConditionalPut = () => {
+      const newer = { ...snapshot("New"), exportedAt: "2026-07-05T21:00:00.000Z" }
+      values.set("published/cloudflare-publish.json", {
+        body: JSON.stringify(newer),
+        customMetadata: { slug: newer.slug, title: newer.title, exportedAt: newer.exportedAt },
+        etag: "concurrent-etag",
+      })
+    }
+
+    const response = await handleCloudflareRequest(new Request("https://behold.example/api/published-documents?slug=cloudflare-publish&exportedAt=2026-07-05T20%3A00%3A00.000Z", {
+      method: "DELETE",
+      headers: { Authorization: "Bearer publish-secret" },
+    }), environment())
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ deleted: false, currentExportedAt: "2026-07-05T21:00:00.000Z" })
+    const get = await handleCloudflareRequest(new Request("https://behold.example/api/published-documents?slug=cloudflare-publish"), environment())
+    expect((await get.json() as { title: string }).title).toBe("New")
+  })
+
+  it("advertises DELETE in the published documents Allow header", async () => {
+    const response = await handleCloudflareRequest(new Request("https://behold.example/api/published-documents", { method: "PATCH" }), environment())
+
+    expect(response.status).toBe(405)
+    expect(response.headers.get("Allow")).toBe("GET, POST, DELETE")
   })
 
   it("injects public metadata into the viewer shell", async () => {
@@ -144,6 +264,7 @@ describe("Cloudflare publishing worker", () => {
     const page = await handleCloudflareRequest(new Request("https://behold.example/published/cloudflare-publish"), environment())
     const html = await page.text()
     expect(page.status).toBe(200)
+    expect(page.headers.get("Cache-Control")).toBe("no-store")
     expect(html).toContain("<title>A &lt;safe&gt; title</title>")
     expect(html).toContain('content="https://behold.example/published/cloudflare-publish"')
     expect(html).toContain('property="og:image" content="https://behold.example/api/og-image?slug=cloudflare-publish"')

@@ -10,10 +10,13 @@ import {
   DocumentMutationSchema as HostedDocumentCreateResultSchema,
   DocumentVersionsSchema as DocumentRevisionListResultSchema,
   HostedDocumentSchema,
+  PublicationReceiptSchema,
   RevisionDiffSchema as DocumentRevisionDiffSchema,
+  type PublicationReceipt,
 } from "../../shared/document-contracts"
 
 export type { PublishedDocumentSnapshot } from "./published"
+export type { PublicationReceipt } from "../../shared/document-contracts"
 
 export interface RenderedMarkdownSection {
   readonly _tag: "markdown"
@@ -36,6 +39,7 @@ export interface HostedDocument {
   readonly version: number
   readonly currentRevisionId: string
   readonly revisionId: string
+  readonly publication?: PublicationReceipt
 }
 
 export interface HostedDocumentCreateResult {
@@ -50,6 +54,7 @@ export interface HostedDocumentCreateResult {
   readonly version: number
   readonly currentRevisionId: string
   readonly revisionId: string
+  readonly publication?: PublicationReceipt
 }
 
 export interface DocumentCommentAnchorSource {
@@ -114,6 +119,7 @@ export interface RecentDocument {
   readonly url: string
   readonly version: number
   readonly currentRevisionId: string
+  readonly publication?: PublicationReceipt
 }
 
 export interface DocumentRevision {
@@ -156,6 +162,14 @@ export interface PublishRemoteResult {
   readonly slug: string
   readonly url: string
   readonly updated: boolean
+  readonly publication?: PublicationReceipt
+}
+
+export interface UnpublishRemoteResult {
+  readonly documentId: string
+  readonly slug: string
+  readonly deleted: boolean
+  readonly cleared: boolean
 }
 
 export type RemoteMarkdownLoadResult =
@@ -291,6 +305,14 @@ const PublishRemoteResultSchema = Schema.Struct({
   slug: Schema.String,
   url: Schema.String,
   updated: Schema.Boolean,
+  publication: Schema.optionalKey(PublicationReceiptSchema),
+})
+
+const UnpublishRemoteResultSchema = Schema.Struct({
+  documentId: Schema.String,
+  slug: Schema.String,
+  deleted: Schema.Boolean,
+  cleared: Schema.Boolean,
 })
 
 type IncomingRenderedDocumentSection = RenderedMarkdownSection | { readonly _tag: "code-reference" }
@@ -540,6 +562,8 @@ const fetchRemoteText = (url: string) =>
     Effect.mapError((error) => boundaryErrorMessage(error, "Unable to load remote text.")),
   )
 
+const localMutation = HttpClientRequest.setHeader("X-Behold-Request", "1")
+
 export const parseDocument = (markdown: string): ReadonlyArray<RenderedMarkdownSection> => {
   const normalized = markdown.replaceAll("\r\n", "\n").replaceAll("\r", "\n")
   return normalized.trim() === "" ? [] : [{ _tag: "markdown", markdown: normalized }]
@@ -573,14 +597,14 @@ export const loadHostedDocument = Effect.fn("DocumentViewer.loadHostedDocument")
 
 export const createHostedDocument = Effect.fn("DocumentViewer.createHostedDocument")(function* (markdown: string) {
   return yield* requestJson(
-    HttpClientRequest.post("/api/documents").pipe(HttpClientRequest.bodyText(markdown, "text/markdown")),
+    HttpClientRequest.post("/api/documents").pipe(localMutation, HttpClientRequest.bodyText(markdown, "text/markdown")),
     HostedDocumentCreateResultSchema,
   ).pipe(Effect.mapError((error) => relabelBoundaryError(error, "Unable to create hosted document.")))
 })
 
 export const createHostedDocumentFromPath = Effect.fn("DocumentViewer.createHostedDocumentFromPath")(function* (filePath: string) {
   return yield* requestJson(
-    HttpClientRequest.post("/api/documents").pipe(HttpClientRequest.bodyJsonUnsafe({ filePath })),
+    HttpClientRequest.post("/api/documents").pipe(localMutation, HttpClientRequest.bodyJsonUnsafe({ filePath })),
     HostedDocumentCreateResultSchema,
   ).pipe(Effect.mapError((error) => relabelBoundaryError(error, "Unable to create hosted document from file path.")))
 })
@@ -600,6 +624,7 @@ export const createDocumentComment = Effect.fn("DocumentViewer.createDocumentCom
 ) {
   return yield* requestJson(
     HttpClientRequest.post(`/api/documents/${encodeURIComponent(documentId)}/comments`).pipe(
+      localMutation,
       HttpClientRequest.bodyJsonUnsafe({ content, location, anchor }),
     ),
     DocumentCommentMutationResultSchema,
@@ -613,6 +638,7 @@ export const updateDocumentCommentStatus = Effect.fn("DocumentViewer.updateDocum
 ) {
   return yield* requestJson(
     HttpClientRequest.patch(`/api/documents/${encodeURIComponent(documentId)}/comments/${encodeURIComponent(commentId)}`).pipe(
+      localMutation,
       HttpClientRequest.bodyJsonUnsafe({ status }),
     ),
     DocumentCommentMutationResultSchema,
@@ -626,6 +652,7 @@ export const updateDocumentCommentContent = Effect.fn("DocumentViewer.updateDocu
 ) {
   return yield* requestJson(
     HttpClientRequest.patch(`/api/documents/${encodeURIComponent(documentId)}/comments/${encodeURIComponent(commentId)}`).pipe(
+      localMutation,
       HttpClientRequest.bodyJsonUnsafe({ content }),
     ),
     DocumentCommentMutationResultSchema,
@@ -637,14 +664,14 @@ export const deleteDocumentComment = Effect.fn("DocumentViewer.deleteDocumentCom
   commentId: string,
 ) {
   return yield* requestJson(
-    HttpClientRequest.delete(`/api/documents/${encodeURIComponent(documentId)}/comments/${encodeURIComponent(commentId)}`),
+    HttpClientRequest.delete(`/api/documents/${encodeURIComponent(documentId)}/comments/${encodeURIComponent(commentId)}`).pipe(localMutation),
     DocumentCommentDeleteResultSchema,
   ).pipe(Effect.mapError((error) => relabelBoundaryError(error, "Unable to delete comment.")))
 })
 
 export const clearDocumentComments = Effect.fn("DocumentViewer.clearDocumentComments")(function* (documentId: string) {
   return yield* requestJson(
-    HttpClientRequest.delete(`/api/documents/${encodeURIComponent(documentId)}/comments`),
+    HttpClientRequest.delete(`/api/documents/${encodeURIComponent(documentId)}/comments`).pipe(localMutation),
     DocumentCommentListResultSchema,
   ).pipe(Effect.mapError((error) => relabelBoundaryError(error, "Unable to clear document comments.")))
 })
@@ -687,7 +714,7 @@ export const diffDocumentRevisions = Effect.fn("DocumentViewer.diffDocumentRevis
 
 export const deleteHostedDocument = Effect.fn("DocumentViewer.deleteHostedDocument")(function* (documentId: string) {
   return yield* requestJson(
-    HttpClientRequest.delete(`/api/documents/${encodeURIComponent(documentId)}`),
+    HttpClientRequest.delete(`/api/documents/${encodeURIComponent(documentId)}`).pipe(localMutation),
     DocumentDeleteResultSchema,
   ).pipe(Effect.mapError((error) => relabelBoundaryError(error, "Unable to delete hosted document.")))
 })
@@ -724,9 +751,24 @@ export const loadPublishedDocuments = Effect.fn("DocumentViewer.loadPublishedDoc
 
 export const publishDocumentSnapshot = Effect.fn("DocumentViewer.publishDocumentSnapshot")(function* (
   snapshot: PublishedDocumentSnapshot,
+  hosted?: { readonly documentId: string; readonly revisionId: string },
 ) {
+  const body = hosted ? { ...hosted, snapshot } : snapshot
   return yield* requestJson(
-    HttpClientRequest.post("/api/publish-remote").pipe(HttpClientRequest.bodyJsonUnsafe(snapshot)),
+    HttpClientRequest.post("/api/publish-remote").pipe(
+      HttpClientRequest.setHeader("X-Behold-Request", "1"),
+      HttpClientRequest.bodyJsonUnsafe(body),
+    ),
     PublishRemoteResultSchema,
   ).pipe(Effect.mapError((error) => relabelBoundaryError(error, "Unable to publish document snapshot.")))
+})
+
+export const unpublishHostedDocument = Effect.fn("DocumentViewer.unpublishHostedDocument")(function* (documentId: string) {
+  return yield* requestJson(
+    HttpClientRequest.delete("/api/publish-remote").pipe(
+      HttpClientRequest.setHeader("X-Behold-Request", "1"),
+      HttpClientRequest.bodyJsonUnsafe({ documentId }),
+    ),
+    UnpublishRemoteResultSchema,
+  ).pipe(Effect.mapError((error) => relabelBoundaryError(error, "Unable to unpublish document snapshot.")))
 })

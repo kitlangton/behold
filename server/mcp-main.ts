@@ -63,7 +63,7 @@ const viewerLayer = Layer.effect(
   Effect.gen(function* () {
     const configuredOrigin = yield* Config.string("BEHOLD_ORIGIN").pipe(
       Config.orElse(() => Config.string("SHOW_AND_TELL_ORIGIN")),
-      Config.withDefault("http://behold.localhost:5173"),
+      Config.withDefault("http://127.0.0.1:5173"),
     )
     const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
     const viewer = yield* Effect.tryPromise({
@@ -102,6 +102,7 @@ const documentApiLayer = Layer.effect(
         HttpClientRequest.setHeaders({
           "x-forwarded-host": publicUrl.host,
           "x-forwarded-proto": publicUrl.protocol.slice(0, -1),
+          "x-behold-request": "1",
         }),
       )
     const client = yield* HttpClient.HttpClient

@@ -4,6 +4,7 @@ import solid from "vite-plugin-solid"
 import { readBeholdLocalEnvironment, resolveBeholdDataDirectory } from "./server/behold-home"
 import { createDocumentApi } from "./server/document-api"
 import { parseAllowedFileRoots } from "./server/local-file-access"
+import { localRequestSecurity } from "./server/local-request-security"
 import { createPublishProxy } from "./server/publish-proxy"
 
 const localEnv = readBeholdLocalEnvironment(process.cwd())
@@ -22,8 +23,11 @@ const withDocumentApi = (server: ViteDevServer | PreviewServer) => {
     allowedFileRoots: () =>
       parseAllowedFileRoots(process.env.BEHOLD_ALLOWED_FILE_ROOTS ?? localEnv.BEHOLD_ALLOWED_FILE_ROOTS ?? process.env.SHOW_ALLOWED_FILE_ROOTS ?? localEnv.SHOW_ALLOWED_FILE_ROOTS ?? ""),
   })
-  server.middlewares.use(createPublishProxy({ ...localEnv, ...process.env }))
+  const publishProxy = createPublishProxy({ ...localEnv, ...process.env }, documentApi.publications)
+  server.middlewares.use(localRequestSecurity)
+  server.middlewares.use(publishProxy.middleware)
   server.middlewares.use(documentApi.middleware)
+  void publishProxy.reconcile()
   server.httpServer?.once("close", () => {
     void documentApi.dispose()
   })

@@ -8,7 +8,7 @@ Behold is a local-first markdown viewer with a publish path to a frozen public s
 
 ```mermaid
 flowchart LR
-  A[Agent or human\nwrites markdown] --> V[Local viewer\nbehold.localhost:5173]
+  A[Agent or human\nwrites markdown] --> V[Local viewer\n127.0.0.1:5173]
   V --> S[JSON store\nOS user data directory]
   V --> P[POST /api/publish-remote]
   P --> B[Cloudflare R2\nsnapshot JSON]

@@ -71,9 +71,10 @@ describe("RailContent", () => {
       publishedTitle: "",
       publishedSlug: "",
       publishStatus: "",
-      publishedRemote: null,
+      publication: null,
       publishing: false,
       hasDocument: true,
+      canPublish: true,
       recentDocuments: [
         { id: "active", title: "Active document", createdAt: "2026-07-04T12:00:00.000Z", updatedAt: "2026-07-05T12:00:00.000Z", url: "/?doc=active", version: 2, currentRevisionId: "revision-2" },
         { id: "other", title: "Other document", createdAt: "2026-07-03T12:00:00.000Z", updatedAt: "2026-07-03T12:00:00.000Z", url: "/?doc=other", version: 1, currentRevisionId: "other-revision" },
@@ -96,6 +97,7 @@ describe("RailContent", () => {
       showActions: true,
       hasPublishedSnapshot: false,
       onPublish: vi.fn(),
+      onUnpublish: vi.fn(),
       onCopyAnnotations: vi.fn(),
       onCopyMarkdown: vi.fn(),
       onClearComments: vi.fn(),
@@ -185,6 +187,49 @@ describe("RailContent", () => {
     expect(props.onCopyMarkdown).toHaveBeenCalledOnce()
     expect(props.onCommentEdit).toHaveBeenCalledWith("annotation-1")
     expect(screen.queryByRole("button", { name: "Clear" })).toBeNull()
+  })
+
+  it("shows open and unpublish controls for a current public copy", () => {
+    const props = renderRail({
+      publication: {
+        slug: "active-document",
+        url: "https://behold.example/published/active-document",
+        exportedAt: "2026-07-05T12:00:00.000Z",
+        publishedRevisionId: "revision-2",
+        remoteStatus: "published",
+        checkedAt: "2026-07-05T12:01:00.000Z",
+      },
+    })
+
+    expect(screen.getByText("Current version is public")).toBeTruthy()
+    expect(screen.getByRole("link", { name: "Open" }).getAttribute("href")).toBe("https://behold.example/published/active-document")
+    expect(screen.queryByRole("button", { name: "Publish" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Unpublish" }))
+    expect(props.onUnpublish).toHaveBeenCalledOnce()
+  })
+
+  it("offers update, republish, and retry from reconciled publication state", () => {
+    const receipt: documentViewer.PublicationReceipt = {
+      slug: "active-document",
+      url: "https://behold.example/published/active-document",
+      exportedAt: "2026-07-05T12:00:00.000Z",
+      publishedRevisionId: "revision-1",
+      remoteStatus: "published",
+      checkedAt: "2026-07-05T12:01:00.000Z",
+    }
+    const update = renderRail({ publication: receipt })
+    fireEvent.click(screen.getByRole("button", { name: "Update" }))
+    expect(update.onPublish).toHaveBeenCalledOnce()
+    cleanup()
+
+    renderRail({ publication: { ...receipt, remoteStatus: "missing" } })
+    expect(screen.getByRole("button", { name: "Republish" })).toBeTruthy()
+    expect(screen.getByText("Remote copy missing")).toBeTruthy()
+    cleanup()
+
+    renderRail({ publication: { ...receipt, publishedRevisionId: "revision-2", remoteStatus: "unavailable" } })
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy()
+    expect(screen.getByText("Remote status unavailable")).toBeTruthy()
   })
 })
 

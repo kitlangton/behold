@@ -17,6 +17,7 @@ import {
 } from "./document-reviews"
 import { resolveReadableLocalFilePath } from "./local-file-access"
 import { readRequestBody, RequestBodyTooLargeError, sendJson, type NextHandleFunction } from "./http-helpers"
+import type { PublicationStore } from "./publish-proxy"
 
 export interface DocumentApiOptions {
   readonly dataDirectory: string
@@ -72,7 +73,7 @@ const decodeJsonPayload = <S extends Schema.ConstraintDecoder<unknown>>(schema: 
 const originForRequest = (request: IncomingMessage): string => {
   const protocol = request.headers["x-forwarded-proto"] === "https" ? "https" : "http"
   const forwardedHost = request.headers["x-forwarded-host"]
-  const host = (typeof forwardedHost === "string" ? forwardedHost : undefined) ?? request.headers.host ?? "behold.localhost:5173"
+  const host = (typeof forwardedHost === "string" ? forwardedHost : undefined) ?? request.headers.host ?? "127.0.0.1:5173"
   return `${protocol}://${host}`
 }
 
@@ -137,6 +138,7 @@ const toHostedDocument = (document: StoredDocument & { readonly revision?: Revis
   version: document.version,
   currentRevisionId: document.currentRevisionId,
   revisionId: document.revision?.id ?? document.currentRevisionId,
+  publication: document.publication,
 })
 
 const documentMutationPayload = (request: IncomingMessage, result: SubmitResult) => {
@@ -161,6 +163,7 @@ const documentMutationPayload = (request: IncomingMessage, result: SubmitResult)
     version: document.version,
     currentRevisionId: document.currentRevisionId,
     revisionId,
+    publication: document.publication,
   }
 }
 
@@ -179,7 +182,11 @@ const revisionPayload = (revision: Revision) => ({
   contentHash: revision.contentHash,
 })
 
-export const createDocumentApi = (options: DocumentApiOptions): { middleware: NextHandleFunction; dispose: () => Promise<void> } => {
+export const createDocumentApi = (options: DocumentApiOptions): {
+  readonly middleware: NextHandleFunction
+  readonly publications: PublicationStore
+  readonly dispose: () => Promise<void>
+} => {
   const eventClients = new Set<ServerResponse>()
   const runtime = ManagedRuntime.make(DocumentReviews.layer({ directory: options.dataDirectory, storeFilePath: options.storeFilePath }))
   type RuntimeServices = ManagedRuntime.ManagedRuntime.Services<typeof runtime>
@@ -221,6 +228,12 @@ export const createDocumentApi = (options: DocumentApiOptions): { middleware: Ne
           if (event._tag === "document-deleted") {
             return Effect.sync(() => {
               sendEvent("document-deleted", { documentId: event.documentId })
+              sendEvent("recent-documents-updated", {})
+            })
+          }
+          if (event._tag === "publication-updated") {
+            return Effect.sync(() => {
+              sendEvent("publication-updated", { documentId: event.documentId })
               sendEvent("recent-documents-updated", {})
             })
           }
@@ -395,9 +408,10 @@ export const createDocumentApi = (options: DocumentApiOptions): { middleware: Ne
                 updatedAt: document.updatedAt,
                 url: `${originForRequest(request)}/?doc=${encodeURIComponent(document.id)}`,
                 version: document.version,
-                currentRevisionId: document.currentRevisionId,
-                revisionId: document.currentRevisionId,
-              })),
+                 currentRevisionId: document.currentRevisionId,
+                 revisionId: document.currentRevisionId,
+                 publication: document.publication,
+               })),
           })
         } catch (error) {
           sendDocumentReviewError(response, error, "Unable to list documents.")
@@ -684,6 +698,17 @@ export const createDocumentApi = (options: DocumentApiOptions): { middleware: Ne
 
   return {
     middleware,
+    publications: {
+      listPublicationReceipts: () => runDocumentReviewsPromise(
+        DocumentReviews.Service.use((service) => service.listPublicationReceipts()),
+      ),
+      setPublicationReceipt: (documentId, publication) => runDocumentReviewsPromise(
+        DocumentReviews.Service.use((service) => service.setPublicationReceipt(documentId, publication)),
+      ).then(() => undefined),
+      clearPublicationReceipt: (documentId, expectedExportedAt) => runDocumentReviewsPromise(
+        DocumentReviews.Service.use((service) => service.clearPublicationReceipt(documentId, expectedExportedAt)),
+      ),
+    },
     dispose: async () => {
       for (const client of eventClients) {
         try {

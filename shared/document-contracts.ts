@@ -2,6 +2,16 @@ import { Schema } from "effect"
 
 const OptionalString = Schema.optionalKey(Schema.String)
 
+export const PublicationReceiptSchema = Schema.Struct({
+  slug: Schema.String,
+  url: Schema.String,
+  exportedAt: Schema.String,
+  publishedRevisionId: Schema.String,
+  remoteStatus: Schema.Literals(["published", "missing", "unavailable"]),
+  checkedAt: Schema.String,
+})
+export interface PublicationReceipt extends Schema.Schema.Type<typeof PublicationReceiptSchema> {}
+
 export const HostedDocumentSchema = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
@@ -12,6 +22,7 @@ export const HostedDocumentSchema = Schema.Struct({
   version: Schema.Number,
   currentRevisionId: Schema.String,
   revisionId: Schema.String,
+  publication: Schema.optionalKey(PublicationReceiptSchema),
 })
 
 export const DocumentMutationSchema = Schema.Struct({
@@ -26,6 +37,7 @@ export const DocumentMutationSchema = Schema.Struct({
   version: Schema.Number,
   currentRevisionId: Schema.String,
   revisionId: Schema.String,
+  publication: Schema.optionalKey(PublicationReceiptSchema),
 })
 
 export const DocumentSummarySchema = Schema.Struct({
@@ -37,6 +49,7 @@ export const DocumentSummarySchema = Schema.Struct({
   version: Schema.Number,
   currentRevisionId: Schema.String,
   revisionId: Schema.String,
+  publication: Schema.optionalKey(PublicationReceiptSchema),
 })
 
 export const DocumentListSchema = Schema.Struct({ documents: Schema.Array(DocumentSummarySchema) })

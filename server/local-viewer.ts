@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, resolve, sep } from "node:path"
 import { createDocumentApi } from "./document-api"
 import { parseAllowedFileRoots } from "./local-file-access"
+import { localRequestSecurity } from "./local-request-security"
 import { createPublishProxy } from "./publish-proxy"
 
 const contentTypes: Readonly<Record<string, string>> = {
@@ -55,42 +56,45 @@ export const startLocalViewer = async (options: {
     runtimeId: options.runtimeId,
     allowedFileRoots: () => parseAllowedFileRoots(options.environment.BEHOLD_ALLOWED_FILE_ROOTS ?? options.environment.SHOW_ALLOWED_FILE_ROOTS ?? ""),
   })
-  const publishProxy = createPublishProxy(options.environment)
+  const publishProxy = createPublishProxy(options.environment, documentApi.publications)
+  await publishProxy.reconcile().catch(() => undefined)
 
   const server = createServer((request, response) => {
-    publishProxy(request, response, () => {
-      documentApi.middleware(request, response, () => {
-        void (async () => {
-          if (request.method !== "GET" && request.method !== "HEAD") {
-            response.statusCode = 405
-            response.end("Method not allowed")
-            return
-          }
-
-          let pathname: string
-          try {
-            pathname = decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname)
-          } catch {
-            response.statusCode = 400
-            response.end("Invalid URL")
-            return
-          }
-
-          const requestedFile = resolve(assets, `.${pathname}`)
-          const insideAssets = requestedFile === assets || requestedFile.startsWith(`${assets}${sep}`)
-          if (insideAssets && pathname !== "/") {
-            const served = await serveFile(request, response, requestedFile, pathname.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache").catch(() => false)
-            if (served) return
-            if (extname(pathname) !== "") {
-              response.statusCode = 404
-              response.end("Not found")
+    localRequestSecurity(request, response, () => {
+      publishProxy.middleware(request, response, () => {
+        documentApi.middleware(request, response, () => {
+          void (async () => {
+            if (request.method !== "GET" && request.method !== "HEAD") {
+              response.statusCode = 405
+              response.end("Method not allowed")
               return
             }
-          }
-          await serveFile(request, response, indexFile, "no-cache")
-        })().catch((error) => {
-          response.statusCode = 500
-          response.end(error instanceof Error ? error.message : "Internal server error")
+
+            let pathname: string
+            try {
+              pathname = decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname)
+            } catch {
+              response.statusCode = 400
+              response.end("Invalid URL")
+              return
+            }
+
+            const requestedFile = resolve(assets, `.${pathname}`)
+            const insideAssets = requestedFile === assets || requestedFile.startsWith(`${assets}${sep}`)
+            if (insideAssets && pathname !== "/") {
+              const served = await serveFile(request, response, requestedFile, pathname.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache").catch(() => false)
+              if (served) return
+              if (extname(pathname) !== "") {
+                response.statusCode = 404
+                response.end("Not found")
+                return
+              }
+            }
+            await serveFile(request, response, indexFile, "no-cache")
+          })().catch((error) => {
+            response.statusCode = 500
+            response.end(error instanceof Error ? error.message : "Internal server error")
+          })
         })
       })
     })
