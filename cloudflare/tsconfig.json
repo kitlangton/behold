@@ -1,0 +1,8 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "jsx": "preserve",
+    "noEmit": true
+  },
+  "include": ["./worker.ts", "./og-image.ts", "./modules.d.ts", "../src/lib/published.ts", "../src/lib/document-viewer.ts"]
+}

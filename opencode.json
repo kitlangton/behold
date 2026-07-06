@@ -1,0 +1,12 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "behold": {
+      "type": "local",
+      "command": ["bun", "run", "server/behold-cli.ts", "mcp"],
+      "cwd": ".",
+      "enabled": true,
+      "timeout": 310000
+    }
+  }
+}
