@@ -368,6 +368,7 @@ describe("landing page", () => {
     expect(document.querySelector(".tree-block")).toBeTruthy()
     expect(document.querySelector(".diff-block")).toBeTruthy()
     expect(document.querySelector(".http-block")).toBeTruthy()
+    expect(document.querySelector(".quiz-block")).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Publish" })).toBeNull()
 
     fireEvent.click(screen.getAllByRole("button", { name: "Copy code" })[0])
@@ -377,6 +378,29 @@ describe("landing page", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2))
     expect(writeText.mock.calls[1]?.[0]).toContain("bunx @kitlangton/behold setup")
     expect(writeText.mock.calls[1]?.[0]).toContain("```timeline")
+  })
+
+  it("grades quiz answers once and reveals the explanation", async () => {
+    installLandingAppEnvironment()
+    render(() => <App />)
+
+    await screen.findByRole("navigation", { name: "Document outline" })
+    const quiz = document.querySelector<HTMLElement>("[data-quiz]")
+    if (!quiz) throw new Error("Missing landing quiz block")
+    const why = quiz.querySelector<HTMLElement>(".quiz-why")
+    expect(why?.hidden).toBe(true)
+
+    const wrong = screen.getByRole("button", { name: /On a public CDN/ })
+    fireEvent.click(wrong)
+
+    expect(wrong.classList.contains("quiz-option-chosen-wrong")).toBe(true)
+    const correct = screen.getByRole("button", { name: /In your local Behold viewer/ })
+    expect(correct.classList.contains("quiz-option-reveal-correct")).toBe(true)
+    expect(why?.hidden).toBe(false)
+    expect(quiz.querySelector("[data-quiz-score]")?.textContent).toBe("0 of 1 correct")
+
+    fireEvent.click(correct)
+    expect(quiz.querySelector("[data-quiz-score]")?.textContent).toBe("0 of 1 correct")
   })
 })
 

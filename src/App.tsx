@@ -165,6 +165,111 @@ export function BeholdWordmark() {
   )
 }
 
+export function PageScrollbar() {
+  let track: HTMLDivElement | undefined
+  let thumb: HTMLDivElement | undefined
+  let stopDragging: (() => void) | undefined
+
+  const metrics = () => {
+    const viewport = window.innerHeight
+    const scrollHeight = document.documentElement.scrollHeight
+    const maxScroll = Math.max(0, scrollHeight - viewport)
+    const thumbHeight = maxScroll === 0 ? viewport : Math.max(32, viewport * viewport / scrollHeight)
+    return { maxScroll, thumbHeight, maxTop: Math.max(0, viewport - thumbHeight) }
+  }
+  const update = () => {
+    if (!track || !thumb) return
+    const current = metrics()
+    const scroll = Math.min(current.maxScroll, Math.max(0, window.scrollY))
+    track.hidden = current.maxScroll === 0
+    track.setAttribute("aria-valuemax", String(Math.round(current.maxScroll)))
+    track.setAttribute("aria-valuenow", String(Math.round(scroll)))
+    thumb.style.height = `${current.thumbHeight}px`
+    thumb.style.transform = `translateY(${current.maxScroll === 0 ? 0 : scroll / current.maxScroll * current.maxTop}px)`
+  }
+  const onTrackPointerDown: JSX.EventHandler<HTMLDivElement, PointerEvent> = (event) => {
+    if (!track || event.target !== track) return
+    const current = metrics()
+    const top = Math.min(current.maxTop, Math.max(0, event.clientY - track.getBoundingClientRect().top - current.thumbHeight / 2))
+    window.scrollTo({ top: current.maxTop === 0 ? 0 : top / current.maxTop * current.maxScroll })
+  }
+  const onThumbPointerDown: JSX.EventHandler<HTMLDivElement, PointerEvent> = (event) => {
+    if (!thumb) return
+    event.preventDefault()
+    const startY = event.clientY
+    const startScroll = window.scrollY
+    thumb.setPointerCapture(event.pointerId)
+    const move = (next: PointerEvent) => {
+      const current = metrics()
+      if (current.maxTop === 0) return
+      window.scrollTo({ top: startScroll + (next.clientY - startY) * current.maxScroll / current.maxTop })
+    }
+    const stop = () => {
+      window.removeEventListener("pointermove", move)
+      window.removeEventListener("pointerup", stop)
+      window.removeEventListener("pointercancel", stop)
+      stopDragging = undefined
+    }
+    stopDragging?.()
+    stopDragging = stop
+    window.addEventListener("pointermove", move)
+    window.addEventListener("pointerup", stop)
+    window.addEventListener("pointercancel", stop)
+  }
+  const onKeyDown: JSX.EventHandler<HTMLDivElement, KeyboardEvent> = (event) => {
+    const movement = event.key === "ArrowDown"
+      ? 40
+      : event.key === "ArrowUp"
+        ? -40
+        : event.key === "PageDown"
+          ? window.innerHeight * 0.9
+          : event.key === "PageUp"
+            ? -window.innerHeight * 0.9
+            : undefined
+    if (movement !== undefined) {
+      event.preventDefault()
+      window.scrollBy({ top: movement })
+      return
+    }
+    if (event.key !== "Home" && event.key !== "End") return
+    event.preventDefault()
+    window.scrollTo({ top: event.key === "Home" ? 0 : metrics().maxScroll })
+  }
+
+  onMount(() => {
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update)
+    observer?.observe(document.querySelector(".app-root") ?? document.body)
+    window.addEventListener("scroll", update, { passive: true })
+    window.addEventListener("resize", update)
+    update()
+    onCleanup(() => {
+      stopDragging?.()
+      observer?.disconnect()
+      window.removeEventListener("scroll", update)
+      window.removeEventListener("resize", update)
+    })
+  })
+
+  return (
+    <div
+      ref={(element) => (track = element)}
+      class="page-scrollbar"
+      role="scrollbar"
+      aria-controls="document-preview"
+      aria-label="Document scroll position"
+      aria-orientation="vertical"
+      aria-valuemin="0"
+      aria-valuemax="0"
+      aria-valuenow="0"
+      tabIndex={0}
+      onPointerDown={onTrackPointerDown}
+      onKeyDown={onKeyDown}
+    >
+      <div ref={(element) => (thumb = element)} class="page-scrollbar-thumb" onPointerDown={onThumbPointerDown} />
+    </div>
+  )
+}
+
 const scrollStoragePrefix = "behold:scroll:"
 
 const landingMarkdown = `# Behold
@@ -242,6 +347,18 @@ Content-Type: application/json
 \`\`\`typescript title="review.ts" start="8" highlight="9"
 const feedback = await collectFeedback(document)
 return applyRevision(document, feedback)
+\`\`\`
+
+\`\`\`quiz
+title: Did it stick?
+questions:
+  - question: Where does a document live before you publish it?
+    options:
+      - label: On a public CDN
+      - label: In your local Behold viewer
+        correct: true
+      - label: In your agent's cloud account
+    why: Local-first means documents and comments stay on your machine until you explicitly publish a frozen snapshot.
 \`\`\`
 `
 
@@ -360,6 +477,26 @@ function renderMermaidInHtml(html: string): string {
 
 const errorMessage = (error: unknown, fallback: string) => (error instanceof Error ? error.message : fallback)
 
+const answerQuizOption = (option: HTMLButtonElement) => {
+  const question = option.closest<HTMLElement>("[data-quiz-question]")
+  if (!question || question.dataset.answered) return
+  const correct = option.dataset.quizCorrect === "1"
+  question.dataset.answered = correct ? "correct" : "wrong"
+  option.classList.add(correct ? "quiz-option-chosen-correct" : "quiz-option-chosen-wrong")
+  for (const other of question.querySelectorAll<HTMLButtonElement>("[data-quiz-option]")) {
+    other.disabled = true
+    if (other.dataset.quizCorrect === "1") other.classList.add("quiz-option-reveal-correct")
+  }
+  question.querySelector<HTMLElement>(".quiz-why")?.removeAttribute("hidden")
+  const quiz = question.closest<HTMLElement>("[data-quiz]")
+  const score = quiz?.querySelector<HTMLElement>("[data-quiz-score]")
+  if (!quiz || !score) return
+  const total = quiz.querySelectorAll("[data-quiz-question]").length
+  const answered = quiz.querySelectorAll("[data-quiz-question][data-answered]").length
+  const right = quiz.querySelectorAll('[data-quiz-question][data-answered="correct"]').length
+  score.textContent = answered === total ? `${right} of ${total} correct` : `${right} correct · ${answered} of ${total} answered`
+}
+
 function MarkdownBlock(props: { readonly text: string; readonly highlighterRevision: number }) {
   const [mermaidRevision, setMermaidRevision] = createSignal(0)
 
@@ -385,6 +522,13 @@ function MarkdownBlock(props: { readonly text: string; readonly highlighterRevis
 
   const onClick: JSX.EventHandlerUnion<HTMLDivElement, MouseEvent> = (event) => {
     if (!(event.target instanceof Element)) return
+    const quizOption = event.target.closest<HTMLButtonElement>("[data-quiz-option]")
+    if (quizOption) {
+      event.preventDefault()
+      event.stopPropagation()
+      answerQuizOption(quizOption)
+      return
+    }
     const button = event.target.closest<HTMLButtonElement>(".code-copy-button")
     if (!button) return
     event.preventDefault()
@@ -1855,6 +1999,7 @@ export default function App() {
   return (
     <main class="app-root">
       <ToastRegion />
+      <PageScrollbar />
       <header class="topbar">
         <div class="page-grid topbar-grid">
           <div class="topbar-row">
@@ -1913,7 +2058,7 @@ export default function App() {
             {renderRail(false)}
           </div>
         </aside>
-        <section class="content" aria-label="Document preview">
+        <section id="document-preview" class="content" aria-label="Document preview">
           <DocumentLoadState
             sourceLoading={sourceLoading()}
             sourceError={sourceError()}

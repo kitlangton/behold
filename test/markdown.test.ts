@@ -280,6 +280,38 @@ Snapshot: An immutable public export.
     expect(html).toContain("document")
   })
 
+  it("renders quizzes with graded options and hidden explanations", () => {
+    const html = renderMarkdownToHtml(`\`\`\`quiz
+title: Check yourself
+questions:
+  - question: Which call boots a \`Location\`?
+    options:
+      - label: session.list
+      - label: locations.get(ref)
+        correct: true
+    why: Only **location-scoped** middleware boots services.
+\`\`\``)
+
+    expect(html).toContain('class="rich-block quiz-block"')
+    expect(html).toContain("data-quiz-correct=\"1\"")
+    expect(html).toContain("data-quiz-correct=\"0\"")
+    expect(html).toContain('<p class="quiz-why rich-prose" hidden>Only <strong>location-scoped</strong> middleware boots services.</p>')
+    expect(html).toContain("0 of 1 answered")
+  })
+
+  it("falls quizzes without a correct option back to ordinary code", () => {
+    const html = renderMarkdownToHtml(`\`\`\`quiz
+questions:
+  - question: Unanswerable?
+    options:
+      - label: first
+      - label: second
+\`\`\``)
+
+    expect(html).not.toContain('class="rich-block quiz-block"')
+    expect(html).toContain("Unanswerable?")
+  })
+
   it("wraps tables in a full-width scroll region", () => {
     const html = renderMarkdownToHtml(`| Name | Status |\n| --- | --- |\n| Behold | Ready |`)
 
@@ -288,7 +320,7 @@ Snapshot: An immutable public export.
     expect(html).toContain("<tbody><tr><td>Behold</td><td>Ready</td></tr></tbody>")
   })
 
-  it.each(["openapi", "http", "schema", "timeline", "definitions"])("falls invalid %s input back to ordinary code", (language) => {
+  it.each(["openapi", "http", "schema", "timeline", "definitions", "quiz"])("falls invalid %s input back to ordinary code", (language) => {
     const html = renderMarkdownToHtml(`\`\`\`${language}\nnot valid for this renderer\n\`\`\``)
 
     expect(html).not.toContain(`class="rich-block ${language}-block"`)

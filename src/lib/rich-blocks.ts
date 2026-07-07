@@ -487,6 +487,63 @@ const renderDefinitionsBlock = (source: string, renderInline: RenderInlineMarkdo
   return `<div class="rich-block definitions-block" role="region" aria-label="Definitions"><div class="rich-block-heading"><span class="rich-block-kicker">Definitions</span></div><dl>${definitions}</dl></div>`
 }
 
+interface QuizOption {
+  readonly label: string
+  readonly correct: boolean
+}
+
+interface QuizQuestion {
+  readonly question: string
+  readonly options: ReadonlyArray<QuizOption>
+  readonly why?: string
+}
+
+const parseQuizOption = (value: unknown): QuizOption | undefined => {
+  if (typeof value === "string") return stringValue(value) ? { label: value.trim(), correct: false } : undefined
+  if (!isDictionary(value)) return undefined
+  const label = stringValue(value.label) ?? stringValue(value.text)
+  if (!label) return undefined
+  return { label, correct: value.correct === true }
+}
+
+const parseQuizQuestion = (value: unknown): QuizQuestion | undefined => {
+  if (!isDictionary(value)) return undefined
+  const question = stringValue(value.question) ?? stringValue(value.prompt)
+  if (!question) return undefined
+  const rawOptions = Array.isArray(value.options) ? value.options : Array.isArray(value.answers) ? value.answers : undefined
+  if (!rawOptions) return undefined
+  const options = rawOptions.map(parseQuizOption)
+  if (options.length < 2 || !options.every((option): option is QuizOption => option !== undefined)) return undefined
+  if (!options.some((option) => option.correct)) return undefined
+  return { question, options, why: stringValue(value.why) ?? stringValue(value.explanation) }
+}
+
+const parseQuiz = (source: string): { readonly title?: string; readonly questions: ReadonlyArray<QuizQuestion> } | undefined => {
+  const parsed = parseStructured(source)
+  const root = isDictionary(parsed) ? parsed : undefined
+  const values = Array.isArray(parsed) ? parsed : Array.isArray(root?.questions) ? root.questions : undefined
+  if (!values || values.length === 0) return undefined
+  const questions = values.map(parseQuizQuestion)
+  if (!questions.every((question): question is QuizQuestion => question !== undefined)) return undefined
+  return { title: stringValue(root?.title), questions }
+}
+
+const quizOptionKey = (index: number): string => String.fromCharCode(65 + (index % 26))
+
+const renderQuizBlock = (source: string, renderInline: RenderInlineMarkdown): string | undefined => {
+  const quiz = parseQuiz(source)
+  if (!quiz) return undefined
+  const questions = quiz.questions.map((question, questionIndex) => {
+    const options = question.options.map((option, optionIndex) =>
+      `<button type="button" class="quiz-option" data-quiz-option data-quiz-correct="${option.correct ? "1" : "0"}"><span class="quiz-option-key" aria-hidden="true">${quizOptionKey(optionIndex)}</span><span class="quiz-option-label rich-prose">${renderInline(option.label)}</span></button>`,
+    ).join("")
+    const why = question.why ? `<p class="quiz-why rich-prose" hidden>${renderInline(question.why)}</p>` : ""
+    return `<li class="quiz-question" data-quiz-question><p class="quiz-prompt rich-prose"><span class="quiz-question-number" aria-hidden="true">${questionIndex + 1}</span>${renderInline(question.question)}</p><div class="quiz-options" role="group">${options}</div>${why}</li>`
+  }).join("")
+  const scoreLabel = `0 of ${quiz.questions.length} answered`
+  return `<div class="rich-block quiz-block" role="region" aria-label="${escapeHtml(quiz.title ?? "Quiz")}" data-quiz><div class="rich-block-heading"><span class="rich-block-kicker">Quiz</span>${quiz.title ? `<strong>${escapeHtml(quiz.title)}</strong>` : ""}</div><ol class="quiz-questions">${questions}</ol><div class="quiz-score" data-quiz-score aria-live="polite">${scoreLabel}</div></div>`
+}
+
 export const renderRichBlock = (language: string, source: string, renderInline: RenderInlineMarkdown): string | undefined => {
   switch (language) {
     case "openapi": return renderOpenApiBlock(source, renderInline)
@@ -496,6 +553,7 @@ export const renderRichBlock = (language: string, source: string, renderInline: 
     case "schema": return renderSchemaBlock(source, renderInline)
     case "timeline": return renderTimelineBlock(source, renderInline)
     case "definitions": return renderDefinitionsBlock(source, renderInline)
+    case "quiz": return renderQuizBlock(source, renderInline)
     default: return undefined
   }
 }
