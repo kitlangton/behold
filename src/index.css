@@ -162,6 +162,7 @@ a:hover { text-decoration: underline; }
 .markdown-block h1 { margin: 1.75rem calc(-1 * var(--pad)); padding: 0 var(--pad) 1.75rem; border-bottom: 1px solid var(--line); font-size: 1.5rem; font-weight: 650; letter-spacing: -0.02em; line-height: 1.35; }
 .markdown-block h2 { margin: 1.75rem calc(-1 * var(--pad)); padding: 0 var(--pad); font-size: 1.15rem; font-weight: 650; letter-spacing: -0.01em; line-height: 1.4; }
 .markdown-block h2::before { content: ""; display: block; height: 1.1rem; margin: 0 calc(-1 * var(--pad)) 1.75rem; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--hatch); }
+.document-flow > .markdown-block > h2:first-of-type::before, .document-flow > .document-section:first-child .markdown-block > h2:first-of-type::before { display: none; }
 .markdown-block h3 { margin: 2.2rem 0 0.7rem; font-size: 1rem; font-weight: 650; letter-spacing: 0; }
 .markdown-block h4 { margin: 1.6rem 0 0.5rem; color: var(--fg-strong); font-size: 0.95rem; font-weight: 650; text-wrap: pretty; }
 .markdown-block h5 { margin: 1.4rem 0 0.4rem; color: var(--fg-strong); font-size: 0.9rem; font-weight: 650; text-wrap: pretty; }
@@ -221,8 +222,15 @@ a:hover { text-decoration: underline; }
 .mermaid-zoom-close { position: fixed; top: 1rem; right: 1rem; padding: 0.45rem 0.65rem; border: 1px solid var(--line-strong); background: var(--bg); color: var(--fg-strong); font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; cursor: pointer; }
 .mermaid-zoom-close:hover { background: var(--bg-hover); }
 
-.tree-block { overflow-x: auto; margin: 1.75rem calc(-1 * var(--pad)); padding: 1.1rem var(--pad); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--bg-inset); color: var(--fg); font-family: var(--mono); font-size: 0.82rem; line-height: 1.55; white-space: pre; }
-.tree-guide { color: var(--fg-faint); }
+.tree-block { overflow-x: auto; margin: 1.75rem calc(-1 * var(--pad)); padding: 1.1rem var(--pad); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--bg-inset); color: var(--fg); font-family: var(--mono); font-size: 0.82rem; line-height: 1.55; }
+.tree-line { display: flex; width: max-content; min-width: 100%; min-height: 1.55em; align-items: baseline; white-space: pre; }
+.tree-guide { display: flex; align-self: stretch; flex: none; }
+.tree-guide-cell { width: 1ch; flex: none; background-repeat: no-repeat; }
+.tree-guide-vertical { background-image: linear-gradient(var(--fg-faint), var(--fg-faint)); background-position: center; background-size: 1px 100%; }
+.tree-guide-branch { background-image: linear-gradient(var(--fg-faint), var(--fg-faint)), linear-gradient(var(--fg-faint), var(--fg-faint)); background-position: center, right center; background-size: 1px 100%, 50% 1px; }
+.tree-guide-elbow { background-image: linear-gradient(var(--fg-faint), var(--fg-faint)), linear-gradient(var(--fg-faint), var(--fg-faint)); background-position: center top, right center; background-size: 1px 50%, 50% 1px; }
+.tree-guide-tee { background-image: linear-gradient(var(--fg-faint), var(--fg-faint)), linear-gradient(var(--fg-faint), var(--fg-faint)); background-position: center, center bottom; background-size: 100% 1px, 1px 50%; }
+.tree-guide-horizontal { background-image: linear-gradient(var(--fg-faint), var(--fg-faint)); background-position: center; background-size: 100% 1px; }
 .tree-dir { color: var(--fg-strong); font-weight: 700; }
 .tree-comment { color: var(--fg-faint); }
 

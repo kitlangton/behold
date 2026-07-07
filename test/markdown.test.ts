@@ -88,6 +88,17 @@ describe("typed fenced blocks", () => {
     expect(html).not.toContain("old <value>")
   })
 
+  it("renders tree guides as connected semantic cells", () => {
+    const html = renderMarkdownToHtml("```tree\nroot/\n├── first\n└── nested/\n    └── child # note\n```")
+
+    expect(html).toContain('class="tree-block" role="tree" aria-label="Tree"')
+    expect(html).toContain('class="tree-line" role="treeitem" aria-level="3"')
+    expect(html).toContain('class="tree-guide-cell tree-guide-branch"')
+    expect(html).toContain('class="tree-guide-cell tree-guide-elbow"')
+    expect(html).toContain('<span class="tree-dir">nested/</span>')
+    expect(html).toContain('<span class="tree-comment"> # note</span>')
+  })
+
   it("renders valid JSON as a collapsible escaped tree", () => {
     const html = renderMarkdownToHtml('```json\n{"name":"<script>","items":[1,true,null]}\n```')
 

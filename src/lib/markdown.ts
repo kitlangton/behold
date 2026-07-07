@@ -49,6 +49,27 @@ const safeHref = (value: string, options?: { readonly allowMailto?: boolean }): 
 
 const treeLinePattern = /^([\s│├└┬─]*)(.*)$/
 
+const treeGuideClass = (character: string): string => {
+  switch (character) {
+    case "│": return "tree-guide-vertical"
+    case "├": return "tree-guide-branch"
+    case "└": return "tree-guide-elbow"
+    case "┬": return "tree-guide-tee"
+    case "─": return "tree-guide-horizontal"
+    default: return "tree-guide-space"
+  }
+}
+
+const renderTreeGuide = (guide: string): string => {
+  const characters = Array.from(guide).flatMap((character) => character === "\t" ? [" ", " ", " ", " "] : [character])
+  return characters.map((character) => `<span class="tree-guide-cell ${treeGuideClass(character)}"></span>`).join("")
+}
+
+const treeLevel = (guide: string): number => {
+  const branch = Math.max(guide.lastIndexOf("├"), guide.lastIndexOf("└"), guide.lastIndexOf("┬"))
+  return branch < 0 ? 1 : Math.floor(branch / 4) + 2
+}
+
 const renderTreeBlock = (source: string): string => {
   const lines = source.replace(/\s+$/, "").split("\n")
   const rendered = lines.map((line) => {
@@ -60,13 +81,13 @@ const renderTreeBlock = (source: string): string => {
     const comment = commentIndex >= 0 ? rest.slice(commentIndex) : ""
     const nameClass = body.trimEnd().endsWith("/") ? "tree-dir" : "tree-name"
     const parts = [
-      guide === "" ? "" : `<span class="tree-guide">${escapeHtml(guide)}</span>`,
+      guide === "" ? "" : `<span class="tree-guide" aria-hidden="true">${renderTreeGuide(guide)}</span>`,
       body === "" ? "" : `<span class="${nameClass}">${escapeHtml(body)}</span>`,
       comment === "" ? "" : `<span class="tree-comment">${escapeHtml(comment)}</span>`,
     ]
-    return parts.join("")
+    return `<div class="tree-line" role="treeitem" aria-level="${treeLevel(guide)}">${parts.join("")}</div>`
   })
-  return `<div class="tree-block">${rendered.join("\n")}</div>`
+  return `<div class="tree-block" role="tree" aria-label="Tree">${rendered.join("")}</div>`
 }
 
 const renderDiffBlock = (source: string): string => {
