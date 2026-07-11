@@ -1,6 +1,7 @@
 import { Marked, type Tokens } from "marked"
 import { highlight } from "./highlighter"
 import { parseFenceInfo, renderEnhancedCodeBlock, renderRichBlock } from "./rich-blocks"
+import { safeResourceUrl } from "./safe-url"
 
 export interface TocEntry {
   readonly id: string
@@ -31,21 +32,6 @@ export const markdownInlineToText = (text: string): string =>
 export const hasFencedCode = (text: string): boolean => /^ {0,3}(?:`{3,}|~{3,})/m.test(text)
 
 export const hasMermaidFence = (text: string): boolean => /^ {0,3}(?:`{3,}|~{3,})mermaid(?:\s|$)/m.test(text)
-
-const safeHref = (value: string, options?: { readonly allowMailto?: boolean }): string | undefined => {
-  if (value.startsWith("#")) return value
-  if (value.startsWith("/")) return value.startsWith("//") ? undefined : value
-  if (value.startsWith("./") || value.startsWith("../") || value.startsWith("?")) return value
-
-  try {
-    const url = new URL(value)
-    if (url.protocol === "http:" || url.protocol === "https:") return url.toString()
-    if (options?.allowMailto === true && url.protocol === "mailto:") return url.toString()
-    return undefined
-  } catch {
-    return undefined
-  }
-}
 
 const treeLinePattern = /^([\s│├└┬─]*)(.*)$/
 
@@ -212,7 +198,7 @@ marked.use({
       return renderCopyableBlock(`<pre${cls}><code>${escapeHtml(token.text)}</code></pre>`, token.text)
     },
     link(token) {
-      const href = safeHref(token.href, { allowMailto: true })
+      const href = safeResourceUrl(token.href, { allowMailto: true })
       const text = this.parser.parseInline(token.tokens)
       if (href === undefined) return text
 
@@ -226,7 +212,7 @@ marked.use({
       return html
     },
     image(token) {
-      const href = safeHref(token.href)
+      const href = safeResourceUrl(token.href)
       const text = token.tokens ? this.parser.parseInline(token.tokens, this.parser.textRenderer) : token.text
       if (href === undefined) return escapeHtml(text)
 

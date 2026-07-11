@@ -1,5 +1,6 @@
 import { parse as parseYaml } from "yaml"
 import { highlightLines } from "./highlighter"
+import { safeResourceUrl } from "./safe-url"
 
 type Dictionary = Record<string, unknown>
 
@@ -544,6 +545,58 @@ const renderQuizBlock = (source: string, renderInline: RenderInlineMarkdown): st
   return `<div class="rich-block quiz-block" role="region" aria-label="${escapeHtml(quiz.title ?? "Quiz")}" data-quiz><div class="rich-block-heading"><span class="rich-block-kicker">Quiz</span>${quiz.title ? `<strong>${escapeHtml(quiz.title)}</strong>` : ""}</div><ol class="quiz-questions">${questions}</ol><div class="quiz-score" data-quiz-score aria-live="polite">${scoreLabel}</div></div>`
 }
 
+interface GalleryItem {
+  readonly src: string
+  readonly alt: string
+  readonly caption?: string
+  readonly detail?: string
+  readonly findings: ReadonlyArray<string>
+}
+
+const parseGallery = (source: string): { readonly title?: string; readonly columns: number; readonly items: ReadonlyArray<GalleryItem> } | undefined => {
+  const parsed = parseStructured(source)
+  const root = isDictionary(parsed) ? parsed : undefined
+  const values = Array.isArray(parsed) ? parsed : Array.isArray(root?.items) ? root.items : undefined
+  if (!values || values.length === 0) return undefined
+  const items = values.flatMap((value): ReadonlyArray<GalleryItem> => {
+    if (!isDictionary(value)) return []
+    const src = stringValue(value.src) ?? stringValue(value.url)
+    const safeSrc = src ? safeResourceUrl(src, { allowAnchor: false }) : undefined
+    const alt = stringValue(value.alt)
+    if (!safeSrc || !alt) return []
+    return [{
+      src: safeSrc,
+      alt,
+      caption: stringValue(value.caption) ?? stringValue(value.title),
+      detail: stringValue(value.detail) ?? stringValue(value.description),
+      findings: Array.isArray(value.findings) ? value.findings.flatMap((finding) => stringValue(finding) ?? []) : [],
+    }]
+  })
+  if (items.length !== values.length) return undefined
+  const requested = typeof root?.columns === "number" ? root.columns : 2
+  const columns = Number.isInteger(requested) ? Math.min(4, Math.max(1, requested)) : 2
+  return { title: stringValue(root?.title), columns, items }
+}
+
+const renderGalleryBlock = (source: string, renderInline: RenderInlineMarkdown): string | undefined => {
+  const gallery = parseGallery(source)
+  if (!gallery) return undefined
+  const items = gallery.items.map((item) => {
+    const caption = item.caption ? `<strong class="gallery-caption-title">${escapeHtml(item.caption)}</strong>` : ""
+    const detail = item.detail ? `<span class="gallery-caption-detail rich-prose">${renderInline(item.detail)}</span>` : ""
+    const findings = item.findings.length
+      ? `<ul class="gallery-findings">${item.findings.map((finding) => `<li class="rich-prose">${renderInline(finding)}</li>`).join("")}</ul>`
+      : ""
+    const figcaption = caption || detail || findings ? `<figcaption class="gallery-caption">${caption}${detail}${findings}</figcaption>` : ""
+    const label = item.caption ?? item.alt
+    return `<figure class="gallery-item"><button type="button" class="gallery-image-button" data-gallery-item data-gallery-src="${escapeHtml(item.src)}" data-gallery-alt="${escapeHtml(item.alt)}" data-gallery-caption="${escapeHtml(item.caption ?? "")}" aria-label="Open ${escapeHtml(label)}"><img src="${escapeHtml(item.src)}" alt="" loading="lazy"></button>${figcaption}</figure>`
+  }).join("")
+  const heading = gallery.title
+    ? `<div class="rich-block-heading"><span class="rich-block-kicker">Gallery</span><strong>${escapeHtml(gallery.title)}</strong></div>`
+    : ""
+  return `<div class="rich-block gallery-block" role="region" aria-label="${escapeHtml(gallery.title ?? "Gallery")}" data-gallery>${heading}<div class="gallery-grid gallery-columns-${gallery.columns}">${items}</div></div>`
+}
+
 export const renderRichBlock = (language: string, source: string, renderInline: RenderInlineMarkdown): string | undefined => {
   switch (language) {
     case "openapi": return renderOpenApiBlock(source, renderInline)
@@ -554,6 +607,7 @@ export const renderRichBlock = (language: string, source: string, renderInline: 
     case "timeline": return renderTimelineBlock(source, renderInline)
     case "definitions": return renderDefinitionsBlock(source, renderInline)
     case "quiz": return renderQuizBlock(source, renderInline)
+    case "gallery": return renderGalleryBlock(source, renderInline)
     default: return undefined
   }
 }

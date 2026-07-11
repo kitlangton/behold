@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import App, { BeholdWordmark, CommentPopover, DocumentLoadState, MermaidZoomOverlay, RailContent, type RailProps } from "./App"
+import App, { BeholdWordmark, CommentPopover, DocumentLoadState, GalleryZoomOverlay, MermaidZoomOverlay, RailContent, type RailProps } from "./App"
 import * as documentViewer from "./lib/document-viewer"
 import { publishedAnnotationsStorageKey } from "./lib/published-annotations"
 import type { PublishedDocumentSnapshot } from "./lib/published"
@@ -503,3 +503,59 @@ describe("MermaidZoomOverlay", () => {
     trigger.remove()
   })
 })
+
+describe("GalleryZoomOverlay", () => {
+  it("navigates with arrow keys and closes back to the trigger", async () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0)
+      return 1
+    })
+    vi.spyOn(window, "scrollTo").mockImplementation(() => undefined)
+    const trigger = document.createElement("button")
+    document.body.append(trigger)
+    trigger.focus()
+    const onClose = vi.fn()
+
+    render(() => (
+      <GalleryZoomOverlay
+        zoom={{
+          index: 0,
+          buttons: [
+            galleryButton("https://example.com/models.png", "Models dialog", "Models", "Current model is marked."),
+            galleryButton("https://example.com/agents.png", "Agents dialog", "Agents", "Description is clipped."),
+          ],
+          origin: { top: 10, left: 10, width: 100, height: 80 },
+          trigger,
+        }}
+        onClose={onClose}
+      />
+    ))
+
+    const dialog = await screen.findByRole("dialog", { name: "Models" })
+    expect(screen.getByAltText("Models dialog")).toBeTruthy()
+    expect(screen.getByText("Current model is marked.")).toBeTruthy()
+
+    fireEvent.keyDown(dialog, { key: "ArrowRight" })
+    expect(await screen.findByRole("dialog", { name: "Agents" })).toBeTruthy()
+    expect(screen.getByAltText("Agents dialog")).toBeTruthy()
+    expect(screen.getByText("Description is clipped.")).toBeTruthy()
+    expect(screen.getByText("2 / 2 · Agents")).toBeTruthy()
+
+    fireEvent.click(screen.getByAltText("Agents dialog"))
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce())
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
+    trigger.remove()
+  })
+})
+
+function galleryButton(src: string, alt: string, caption: string, finding: string) {
+  const figure = document.createElement("figure")
+  const button = document.createElement("button")
+  const description = document.createElement("figcaption")
+  button.dataset.gallerySrc = src
+  button.dataset.galleryAlt = alt
+  button.dataset.galleryCaption = caption
+  description.innerHTML = `<strong class="gallery-caption-title">${caption}</strong><ul class="gallery-findings"><li>${finding}</li></ul>`
+  figure.append(button, description)
+  return button
+}

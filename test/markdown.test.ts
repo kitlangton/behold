@@ -171,6 +171,55 @@ Content-Type: application/json
     expect(html).not.toContain("<script>")
   })
 
+  it("renders image galleries as contiguous zoomable tiles", () => {
+    const html = renderMarkdownToHtml(`\`\`\`gallery
+title: Modal audit
+columns: 2
+items:
+  - src: https://example.com/model.png
+    alt: Select model dialog
+    caption: Models
+    detail: modal-audit.ts → modal-models
+    findings:
+      - Description clips before the end.
+      - Current and focused states look too similar.
+  - src: ./agent.png
+    alt: Select agent dialog
+    caption: Agents
+\`\`\``)
+
+    expect(html).toContain('class="rich-block gallery-block"')
+    expect(html).toContain('class="gallery-grid gallery-columns-2"')
+    expect(html).toContain('data-gallery-item')
+    expect(html).toContain('data-gallery-src="https://example.com/model.png"')
+    expect(html).toContain('data-gallery-src="./agent.png"')
+    expect(html).toContain("modal-audit.ts → modal-models")
+    expect(html).toContain('class="gallery-findings"')
+    expect(html).toContain("Description clips before the end.")
+  })
+
+  it("falls unsafe gallery sources back to ordinary code", () => {
+    const html = renderMarkdownToHtml(`\`\`\`gallery
+items:
+  - src: javascript:alert(1)
+    caption: Unsafe
+\`\`\``)
+
+    expect(html).not.toContain('class="gallery-block"')
+    expect(html).toContain("javascript:alert(1)")
+  })
+
+  it("falls galleries without descriptive alt text back to ordinary code", () => {
+    const html = renderMarkdownToHtml(`\`\`\`gallery
+items:
+  - src: https://example.com/model.png
+    caption: Models
+\`\`\``)
+
+    expect(html).not.toContain('class="gallery-block"')
+    expect(html).toContain("https://example.com/model.png")
+  })
+
   it("frames ordinary code with file, line, highlight, and caption metadata", () => {
     const html = renderMarkdownToHtml('```typescript title="src/order.ts" start=42 highlight=43 caption="Order validation"\nconst safe = true\nconst value = "<unsafe>"\n```')
 

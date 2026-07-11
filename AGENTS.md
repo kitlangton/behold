@@ -61,6 +61,7 @@ Documents remain portable Markdown. Use exact language labels on ordinary code f
 - `timeline`: YAML or JSON event list
 - `definitions`: YAML or JSON glossary
 - `quiz`: YAML or JSON multiple-choice comprehension check with graded options
+- `gallery`: YAML or JSON image grid with captions, per-image findings, and click-to-open previews
 
 Prefer semantic rich blocks when they improve scanning, but use ordinary Markdown instead of adding visual decoration without information. Prefer ASCII diagrams in project-authored architecture notes unless Mermaid is explicitly requested.
 

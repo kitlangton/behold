@@ -551,6 +551,82 @@ function MarkdownBlock(props: { readonly text: string; readonly highlighterRevis
   return <div class="markdown-block" innerHTML={html()} onClick={onClick} />
 }
 
+interface GalleryZoomItem {
+  readonly src: string
+  readonly alt: string
+  readonly caption?: string
+  readonly description?: HTMLElement
+}
+
+interface GalleryZoomSource {
+  readonly buttons: ReadonlyArray<HTMLButtonElement>
+  readonly index: number
+  readonly origin: ZoomOrigin
+  readonly trigger: HTMLButtonElement
+}
+
+function readGalleryZoomSource(selected: HTMLButtonElement): GalleryZoomSource | undefined {
+  const buttons = Array.from(selected.closest("[data-gallery]")?.querySelectorAll<HTMLButtonElement>("[data-gallery-item]") ?? [selected])
+    .filter((button) => button.dataset.gallerySrc !== undefined)
+  const index = buttons.indexOf(selected)
+  if (index < 0) return
+  const rect = selected.getBoundingClientRect()
+  return { buttons, index, origin: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }, trigger: selected }
+}
+
+function readGalleryZoomItem(button: HTMLButtonElement): GalleryZoomItem {
+  return {
+    src: button.dataset.gallerySrc ?? "",
+    alt: button.dataset.galleryAlt ?? "Gallery image",
+    caption: button.dataset.galleryCaption || undefined,
+    description: button.closest("figure")?.querySelector("figcaption") ?? undefined,
+  }
+}
+
+export function GalleryZoomOverlay(props: { readonly zoom: GalleryZoomSource; readonly onClose: () => void }) {
+  const [index, setIndex] = createSignal(props.zoom.index)
+  const item = createMemo(() => readGalleryZoomItem(props.zoom.buttons[index()]!))
+  const margin = Math.min(48, window.innerWidth * 0.05)
+  let description!: HTMLDivElement
+  const move = (direction: number) => setIndex((index() + direction + props.zoom.buttons.length) % props.zoom.buttons.length)
+  const navigate = (event: KeyboardEvent) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+    event.preventDefault()
+    move(event.key === "ArrowLeft" ? -1 : 1)
+  }
+  createEffect(() => {
+    description.replaceChildren(...Array.from(item().description?.childNodes ?? [], (node) => node.cloneNode(true)))
+  })
+
+  return (
+    <ZoomOverlay
+      origin={props.zoom.origin}
+      aspect={window.innerWidth - margin * 2 <= 42 * 16 ? 2 / 3 : 8 / 5}
+      title={item().caption ?? item().alt}
+      closeLabel="Close image preview"
+      restoreFocusTo={props.zoom.trigger}
+      onClose={props.onClose}
+      onKeyDown={navigate}
+    >
+      <div class="zoom-canvas gallery-zoom-layout">
+        <div class="gallery-zoom-media">
+          <img class="gallery-zoom-image" src={item().src} alt={item().alt} />
+        </div>
+        <aside class="gallery-zoom-sidebar" onClick={(event) => event.stopPropagation()}>
+          <div ref={description} class="gallery-zoom-description" />
+          <Show when={props.zoom.buttons.length > 1}>
+            <nav class="gallery-zoom-navigation" aria-label="Gallery navigation">
+              <button type="button" aria-label="Previous image" onClick={() => move(-1)}>←</button>
+              <span aria-live="polite">{index() + 1} / {props.zoom.buttons.length} · {item().caption ?? item().alt}</span>
+              <button type="button" aria-label="Next image" onClick={() => move(1)}>→</button>
+            </nav>
+          </Show>
+        </aside>
+      </div>
+    </ZoomOverlay>
+  )
+}
+
 function useActiveHeading(ids: () => ReadonlyArray<string>) {
   const [activeId, setActiveId] = createSignal("")
   let lastY = 0
@@ -808,53 +884,79 @@ export function CommentPopover(props: {
   )
 }
 
-interface MermaidZoomSource {
-  readonly svg: string
-  readonly origin: { readonly top: number; readonly left: number; readonly width: number; readonly height: number }
+interface ZoomOrigin {
+  readonly top: number
+  readonly left: number
+  readonly width: number
+  readonly height: number
 }
 
-export function MermaidZoomOverlay(props: { readonly zoom: MermaidZoomSource; readonly onClose: () => void }) {
+interface MermaidZoomSource {
+  readonly svg: string
+  readonly origin: ZoomOrigin
+  readonly trigger?: HTMLButtonElement
+}
+
+function ZoomOverlay(props: {
+  readonly origin: ZoomOrigin
+  readonly aspect: number
+  readonly title: string
+  readonly closeLabel: string
+  readonly restoreFocusTo?: HTMLElement
+  readonly onClose: () => void
+  readonly onKeyDown?: (event: KeyboardEvent) => void
+  readonly children: JSX.Element
+}) {
   const [active, setActive] = createSignal(false)
   const [dialogOpen, setDialogOpen] = createSignal(true)
   let closeTimer = 0
+  let openFrame = 0
+  let activeFrame = 0
+  let restoreFrame = 0
   let closeButton: HTMLButtonElement | undefined
-  const restoreFocusTo = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  const restoreFocusTo = props.restoreFocusTo ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null)
 
   const margin = Math.min(48, window.innerWidth * 0.05)
-  const aspect = props.zoom.origin.width / Math.max(props.zoom.origin.height, 1)
-  const targetWidth = Math.min(window.innerWidth - margin * 2, (window.innerHeight - margin * 2) * aspect)
-  const targetHeight = targetWidth / aspect
+  const targetWidth = Math.min(window.innerWidth - margin * 2, (window.innerHeight - margin * 2) * props.aspect)
+  const targetHeight = targetWidth / props.aspect
   const targetLeft = (window.innerWidth - targetWidth) / 2
   const targetTop = (window.innerHeight - targetHeight) / 2
-  const collapsedTransform = `translate(${props.zoom.origin.left - targetLeft}px, ${props.zoom.origin.top - targetTop}px) scale(${props.zoom.origin.width / targetWidth}, ${props.zoom.origin.height / targetHeight})`
+  const collapsedTransform = `translate(${props.origin.left - targetLeft}px, ${props.origin.top - targetTop}px) scale(${props.origin.width / targetWidth}, ${props.origin.height / targetHeight})`
+  const closeDelay = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? 0 : 280
 
   const close = () => {
     if (closeTimer) return
     setActive(false)
     closeTimer = window.setTimeout(() => {
       setDialogOpen(false)
-      window.requestAnimationFrame(() => {
+      restoreFrame = window.requestAnimationFrame(() => {
         if (restoreFocusTo?.isConnected) restoreFocusTo.focus()
         props.onClose()
       })
-    }, 280)
+    }, closeDelay)
   }
 
   onMount(() => {
-    window.requestAnimationFrame(() => window.requestAnimationFrame(() => setActive(true)))
+    openFrame = window.requestAnimationFrame(() => {
+      activeFrame = window.requestAnimationFrame(() => setActive(true))
+    })
     onCleanup(() => {
       if (closeTimer) window.clearTimeout(closeTimer)
+      if (openFrame) window.cancelAnimationFrame(openFrame)
+      if (activeFrame) window.cancelAnimationFrame(activeFrame)
+      if (restoreFrame) window.cancelAnimationFrame(restoreFrame)
     })
   })
 
   return (
     <KobalteDialog open={dialogOpen()} onOpenChange={(open) => { if (!open) close() }} modal preventScroll={false}>
       <KobalteDialog.Portal>
-        <KobalteDialog.Overlay class="mermaid-zoom-backdrop" classList={{ "mermaid-zoom-active": active() }} onWheel={(event) => event.preventDefault()} />
+        <KobalteDialog.Overlay class="zoom-backdrop" classList={{ "zoom-backdrop-active": active() }} onWheel={(event) => event.preventDefault()} />
         <KobalteDialog.Content
-          class="mermaid-zoom-stage"
+          class="zoom-stage"
           aria-modal="true"
           onClick={close}
+          onKeyDown={props.onKeyDown}
           onWheel={(event) => event.preventDefault()}
           style={{
             top: `${targetTop}px`,
@@ -868,12 +970,27 @@ export function MermaidZoomOverlay(props: { readonly zoom: MermaidZoomSource; re
             closeButton?.focus()
           }}
         >
-          <KobalteDialog.Title class="visually-hidden">Diagram preview</KobalteDialog.Title>
-          <div class="mermaid-zoom-canvas" innerHTML={props.zoom.svg} />
-          <button ref={(element) => (closeButton = element)} type="button" class="mermaid-zoom-close" aria-label="Close diagram preview" onClick={close}>Close</button>
+          <KobalteDialog.Title class="visually-hidden">{props.title}</KobalteDialog.Title>
+          {props.children}
+          <button ref={(element) => (closeButton = element)} type="button" class="zoom-close" aria-label={props.closeLabel} onClick={close}>Close</button>
         </KobalteDialog.Content>
       </KobalteDialog.Portal>
     </KobalteDialog>
+  )
+}
+
+export function MermaidZoomOverlay(props: { readonly zoom: MermaidZoomSource; readonly onClose: () => void }) {
+  return (
+    <ZoomOverlay
+      origin={props.zoom.origin}
+      aspect={props.zoom.origin.width / Math.max(props.zoom.origin.height, 1)}
+      title="Diagram preview"
+      closeLabel="Close diagram preview"
+      restoreFocusTo={props.zoom.trigger}
+      onClose={props.onClose}
+    >
+      <div class="zoom-canvas mermaid-zoom-canvas" innerHTML={props.zoom.svg} />
+    </ZoomOverlay>
   )
 }
 
@@ -1194,6 +1311,7 @@ export default function App() {
   const [deletingDocument, setDeletingDocument] = createSignal(false)
   const [highlighterRevision, setHighlighterRevision] = createSignal(0)
   const [mermaidZoom, setMermaidZoom] = createSignal<MermaidZoomSource | null>(null)
+  const [galleryZoom, setGalleryZoom] = createSignal<GalleryZoomSource | null>(null)
   const [highlightRects, setHighlightRects] = createSignal<ReadonlyArray<{ top: number; left: number; width: number; height: number }>>([])
   const [commentHighlightRects, setCommentHighlightRects] = createSignal<ReadonlyArray<CommentHighlightRect>>([])
   const [hoveredCommentId, setHoveredCommentId] = createSignal<string | null>(null)
@@ -1283,11 +1401,21 @@ export default function App() {
   }
 
   const onFlowClick = (event: MouseEvent) => {
+    const galleryItem = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("[data-gallery-item]") : null
+    if (galleryItem) {
+      const zoom = readGalleryZoomSource(galleryItem)
+      if (zoom) setGalleryZoom(zoom)
+      return
+    }
     const block = event.target instanceof Element ? event.target.closest(".mermaid-block") : null
     const svg = block?.querySelector("svg")
     if (svg) {
       const rect = svg.getBoundingClientRect()
-      setMermaidZoom({ svg: svg.outerHTML, origin: { top: rect.top, left: rect.left, width: rect.width, height: rect.height } })
+      setMermaidZoom({
+        svg: svg.outerHTML,
+        origin: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
+        trigger: block?.querySelector<HTMLButtonElement>(".mermaid-zoom-trigger") ?? undefined,
+      })
       return
     }
     if (!window.getSelection()?.isCollapsed) return
@@ -1417,6 +1545,11 @@ export default function App() {
       setPublication(result.publication ?? null)
       setPublishStatus(result.updated ? `Updated ${result.url}` : `Published ${result.url}`)
       showToast({ variant: "success", description: result.updated ? `Updated ${result.url}` : `Published ${result.url}` })
+      try {
+        await navigator.clipboard.writeText(result.url)
+      } catch (error) {
+        showToast({ variant: "error", description: errorMessage(error, "Published, but unable to copy the URL to the clipboard.") })
+      }
     } catch (error) {
       const message = errorMessage(error, "Unable to publish document.")
       setPublishStatus(message)
@@ -2102,6 +2235,7 @@ export default function App() {
       </Show>
       <Show keyed when={pendingComment()}>{(pending) => <CommentPopover pending={pending} onSave={(text) => void saveComment(text)} onCancel={clearPendingComment} onDelete={isPublishedView && pending.commentId ? deletePublishedComment : undefined} saving={savingComment()} />}</Show>
       <Show when={mermaidZoom()}>{(zoom) => <MermaidZoomOverlay zoom={zoom()} onClose={() => setMermaidZoom(null)} />}</Show>
+      <Show when={galleryZoom()}>{(zoom) => <GalleryZoomOverlay zoom={zoom()} onClose={() => setGalleryZoom(null)} />}</Show>
     </main>
   )
 }
